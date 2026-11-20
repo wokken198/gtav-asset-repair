@@ -9,7 +9,7 @@ Small, focused helpers for GTA V (Enhanced / gen9) texture and ped-variation wor
 | `gtatools normals` | badge diffuse map → tangent-space normal map (DDS) + contact sheet |
 | `gtatools audit` | CPedVariationInfo (`.ymt`) consistency check against vanilla's rules |
 | `gtatools scale` | DDS rescaling that keeps pixel format and mip depth |
-| `gtatools pack` | build a YTD from a CodeWalker XML + a folder of DDS |
+| `gtatools pack` | build a `.ytd` from a CodeWalker XML + a folder of DDS |
 
 No game assets are included; everything reads from your own install.
 
@@ -21,7 +21,7 @@ No game assets are included; everything reads from your own install.
 |---|---|---|---|
 | 386 vehicles, 796 badge textures (rebuilt at 256, DXT5, full mips) | 386.9 MB | 373.2 MB | −13.7 MB |
 | badge payload only | 65.4 MB | 44.1 MB | **−33%** |
-| one 2048² 16-texture ped texture dictionary, rescaled to 1536 | 16.6 MB | 10.6 MB | **−36%** |
+| a 16-texture 2048² ped `.ytd`, rescaled to 1536 | 16.6 MB | 10.6 MB | **−36%** |
 | 190 oversized DDS, long edge 2048 → 1536 | 820.8 MB | 521.4 MB | −36% |
 
 Zero failures across those batches, and a pack → export → compare round trip came back
@@ -72,7 +72,7 @@ Checks against what vanilla peds actually do:
 - `compInfos` has exactly one entry per `(slot, drawable)`; the key is the **slot index inside
   `availComp`**, not the component's position in `aComponentData3`
 - `texId` is a race suffix (`0 uni, 1 whi, 2 bla, 3 chi, 4 lat, 5 ara, 10 pak`), not a texture slot
-- dangling components (declared in the ymt but with no drawable in the ydd) and count mismatches
+- dangling components (declared in the .ymt but with no drawable in the .ydd) and count mismatches
 
 Exit code `2` when problems are found, so it can gate a build.
 
@@ -89,7 +89,7 @@ gtatools scale <paths...> --out resized --long-edge 1536 --min-edge 1025
 - unsupported formats are skipped and reported, never half-written
 - an output tree mirroring the inputs is built under `--out`
 
-## Pack
+## pack
 
 ```bash
 gtatools pack --xml vehshare.ytd.xml --build build_dir --out vehshare.ytd \
@@ -97,7 +97,7 @@ gtatools pack --xml vehshare.ytd.xml --build build_dir --out vehshare.ytd \
 ```
 
 `--original` copies `G9_UsageData / G9_Flags / UsageData / UsageFlags / ExtraFlags` from an existing
-archive, matched by texture name. This matters: CodeWalker's YTD XML does not carry the gen9
+archive, matched by texture name. This matters: CodeWalker's XML export does not carry the gen9
 render-target descriptor bits, and losing them breaks scripted render targets (dashboard dials and
 similar) — the archive still loads, the game crashes when the target is drawn.
 
@@ -152,13 +152,13 @@ Node and CodeWalker are not bundled: `pack` shells out to CodeWalker's .NET asse
 
 ## Known pitfalls this repo encodes
 
-- **XML → YTD is lossy** for `script_rt_*` textures; always pack with `--original` when you have a
+- **XML → `.ytd` round trip is lossy** for `script_rt_*` textures; always pack with `--original` when you have a
   reference archive.
 - **CodeWalker's DDS export flattens A8R8G8B8 to 8 bpp grayscale**, so exported channel statistics lie
   for mask-style textures (plate fonts, glyph atlases); read `TextureData.FullData` if it matters.
 - **Legacy (gen8) vertex data** is exported as `<Data2>` while the importer only reads `<Data>` —
   round-tripping a legacy `.ydd` through XML silently drops its meshes. Merge legacy peds from binary.
-- `availComp` appears either as spaced decimals or one hex blob; both forms are parsed here.
+- `.ymt` `availComp` appears either as spaced decimals or one hex blob; both forms are parsed here.
 - Patch-DLC override order follows `dlclist.xml`, not the `<order>` element in `setup2.xml`: a texture
   shipped in a later-loading pack wins even when an earlier pack declares the same name.
 - Pillow ≥12 premultiplies alpha when resizing RGBA, which darkens translucent art: scale channels
@@ -181,6 +181,8 @@ src/gtatools/       cli.py, dds.py, normals.py, ymt.py, cw.py
 tests/              test_core.py
 resources/          pack_ytd.ps1
 dsh-plugin/         DSH bundle (index.js, locale/, vendor/gtatools, icon.svg)
+docs/images/        README artwork
+.github/            tests workflow
 ```
 
 ## License
