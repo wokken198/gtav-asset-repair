@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+tests/_tmp/
+_demo/
+*.dds
+*.DDS
+*.ytd
+*.ydd
+*.ymt
+*.rpf
+out/
