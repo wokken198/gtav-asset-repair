@@ -1,6 +1,9 @@
 # gtatools
 
+[![tests](https://github.com/wokken198/gtav-toolkit/actions/workflows/tests.yml/badge.svg)](https://github.com/wokken198/gtav-toolkit/actions/workflows/tests.yml)
+
 Small, focused helpers for GTA V (Enhanced / gen9) texture and ped-variation work.
+
 
 Three tools, all driven by one CLI:
 
