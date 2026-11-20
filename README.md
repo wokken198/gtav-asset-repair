@@ -111,6 +111,16 @@ directory's parents.
 (`gta_badge_normal`, `gta_ymt_audit`, `gta_ytd_scale`, `gta_ytd_pack`). The Python package is vendored
 inside, so nothing needs to be pip-installed.
 
+### Prerequisites
+
+| need | why |
+|---|---|
+| DeepSeek Harness (recent build) | the bundle manifest (`dsh.bundle.patch`) |
+| Windows | `normals` and `scale` shell out to `texconv.exe`; `pack` shells out to CodeWalker's .NET assembly |
+| Python 3.9+ with `numpy` and `Pillow` | DeepSeek Harness already ships one and the bundle probes for it — usually nothing to install |
+| `texconv.exe` (DirectXTex) | only `normals` and `scale` |
+| `CodeWalker.Core.dll` (dev48+) | only `pack` |
+
 ### Install from a checkout
 
 ```bash
@@ -148,6 +158,24 @@ Environment variables (optional; set before launching DSH):
 | `GTA_TOOLS_TEXCONV` | path to `texconv.exe`; when unset it is looked up on `PATH` and in the working directory's parents |
 | `GTA_TOOLS_CW` | CodeWalker folder holding `CodeWalker.Core.dll`; when unset the plugin probes `GTA_TOOLS_CW`/`CODEWALKER_DIR`, common install locations, Desktop, and the working directory's parents. Only `gta_ytd_pack` needs it |
 
+### After installing
+
+1. The Plugins list shows **GTA V texture tools**.
+2. Smoke test from any session — ask the agent to run `gta_ytd_scale` on a folder of DDS with a small
+   target size, or `gta_ymt_audit` on an exported ped `.ymt.xml`. A table with no errors means the
+   Python side is wired up.
+3. Tool names: `gta_badge_normal`, `gta_ymt_audit`, `gta_ytd_scale`, `gta_ytd_pack`.
+
+### Troubleshooting
+
+- **`ModuleNotFoundError: numpy`** — the bundle probes `python3`, `python`, then the interpreter
+  bundled with DeepSeek Harness, and skips any candidate that cannot import `numpy`/`PIL`. If a system
+  Python is picked anyway (for example before an update), point `GTA_TOOLS_PYTHON` at the bundled one,
+  or `pip install numpy pillow` for the system interpreter.
+- **`FileNotFoundError: texconv`** — put `texconv.exe` on `PATH`, in the working directory tree, or set
+  `GTA_TOOLS_TEXCONV`.
+- **`pack` cannot find CodeWalker** — it prints `codewalker: <path>` on success and exits `2` with a hint
+  when nothing was found. Set `GTA_TOOLS_CW` to the folder that holds `CodeWalker.Core.dll`.
 Node and CodeWalker are not bundled: `pack` shells out to CodeWalker's .NET assembly on Windows.
 
 ## Known pitfalls this repo encodes
