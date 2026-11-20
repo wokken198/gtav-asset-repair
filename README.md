@@ -15,6 +15,18 @@ No game assets are included; everything reads from your own install.
 
 ![flat diffuse on the left, the same texture lit with a generated normal map on the right](docs/images/hero.png)
 
+## What it does to a real pack
+
+| pass | before | after | delta |
+|---|---|---|---|
+| 386 vehicles, 796 badge textures (rebuilt at 256, DXT5, full mips) | 386.9 MB | 373.2 MB | −13.7 MB |
+| badge payload only | 65.4 MB | 44.1 MB | **−33%** |
+| one 2048² 16-texture ped texture dictionary, rescaled to 1536 | 16.6 MB | 10.6 MB | **−36%** |
+| 190 oversized DDS, long edge 2048 → 1536 | 820.8 MB | 521.4 MB | −36% |
+
+Zero failures across those batches, and a pack → export → compare round trip came back
+byte-identical on the sampled files.
+
 ## Install
 
 ```bash
