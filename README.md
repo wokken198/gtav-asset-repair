@@ -176,6 +176,7 @@ Environment variables (optional; set before launching DSH):
   `GTA_TOOLS_TEXCONV`.
 - **`pack` cannot find CodeWalker** — it prints `codewalker: <path>` on success and exits `2` with a hint
   when nothing was found. Set `GTA_TOOLS_CW` to the folder that holds `CodeWalker.Core.dll`.
+
 Node and CodeWalker are not bundled: `pack` shells out to CodeWalker's .NET assembly on Windows.
 
 ## Known pitfalls this repo encodes
