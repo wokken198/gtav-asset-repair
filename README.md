@@ -13,6 +13,8 @@ Small, focused helpers for GTA V (Enhanced / gen9) texture and ped-variation wor
 
 No game assets are included; everything reads from your own install.
 
+![flat diffuse on the left, the same texture lit with a generated normal map on the right](docs/images/hero.png)
+
 ## Install
 
 ```bash
@@ -43,6 +45,8 @@ For every `*badge*.dds` that is not already a normal map:
 5. encode with a full mip chain (`--max-mips` caps it)
 
 Tuning: flat decals 8–10, chrome / baked-specular art 4–5, text-only art 6–7.
+
+![diffuse to height field to normal map to lit result](docs/images/pipeline.png)
 
 ## audit
 
