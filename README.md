@@ -106,7 +106,7 @@ The bundle is named `dsh-gta-tools`.
 
 ### Install from a pinned commit
 
-Pass this as `install_bundle`'s `target`, replacing `<commit>` with a commit of this repository:
+Pass this as the `target` of `install_bundle`, replacing `<commit>` with a commit of this repository:
 
 ```text
 git+https://github.com/wokken198/gtav-toolkit.git#<commit>&path:/dsh-plugin
@@ -143,8 +143,8 @@ Node and CodeWalker are not bundled: `pack` shells out to CodeWalker's .NET asse
 - **Legacy (gen8) vertex data** is exported as `<Data2>` while the importer only reads `<Data>` —
   round-tripping a legacy `.ydd` through XML silently drops its meshes. Merge legacy peds from binary.
 - `availComp` appears either as spaced decimals or one hex blob; both forms are parsed here.
-- Patch-DLC override order follows `dlclist.xml`, not `setup2.xml`'s `<order>`: a texture shipped in a
-  later-loading pack wins even when an earlier pack declares the same name.
+- Patch-DLC override order follows `dlclist.xml`, not the `<order>` element in `setup2.xml`: a texture
+  shipped in a later-loading pack wins even when an earlier pack declares the same name.
 - Pillow ≥12 premultiplies alpha when resizing RGBA, which darkens translucent art: scale channels
   separately.
 
