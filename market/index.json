@@ -56,11 +56,11 @@
       "versions": [
         {
           "version": "0.1.1",
-          "publishTimestamp": 1795189904,
+          "publishTimestamp": 1795190523,
           "source": {
             "type": "git",
             "url": "https://github.com/wokken198/gtav-toolkit",
-            "commit": "8afae84e6f706f980c438d5f42def3cc53473e61",
+            "commit": "c17e6223d219c67c77c5d2e44793f7b40acdc841",
             "path": "dsh-plugin"
           },
           "engines": {}
