@@ -1,0 +1,9 @@
+# dsh-gta-tools - GTA V texture/ped helpers as agent tools.
+# Needs python + texconv.exe on the machine; configure with environment variables:
+#   GTA_TOOLS_PYTHON  python executable (default: python)
+#   GTA_TOOLS_TEXCONV path to texconv.exe
+#   GTA_TOOLS_CW      CodeWalker directory (only for gta_ytd_pack)
+- insert:
+    - id: gta-tools
+      name: dsh-gta-tools
+      config: {}

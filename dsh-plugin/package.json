@@ -1,0 +1,36 @@
+{
+    "name":  "dsh-gta-tools",
+    "version":  "0.1.0",
+    "description":  "GTA V badge normal maps, YMT audits and YTD packing as DeepSeek Harness tools",
+    "license":  "MIT",
+    "type":  "module",
+    "exports":  {
+                    ".":  "./index.js",
+                    "./locale/*.json":  "./locale/*.json",
+                    "./icon":  "./icon.svg"
+                },
+    "files":  [
+                  "index.js",
+                  "cordis.patch.yml",
+                  "locale/*.json",
+                  "icon.svg",
+                  "docs",
+                  "vendor",
+                  "resources/pack_ytd.ps1",
+                  "README.md"
+              ],
+    "keywords":  [
+                     "dsh",
+                     "dsh-plugin",
+                     "gta5",
+                     "gta",
+                     "normal-map",
+                     "dds",
+                     "ytd"
+                 ],
+    "dsh":  {
+                "bundle":  {
+                               "patch":  "./cordis.patch.yml"
+                           }
+            }
+}

@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gtatools"
+version = "0.1.0"
+description = "Small GTA V asset helpers: badge normal maps, CPedVariationInfo auditing, DDS rescaling, YTD packing"
+requires-python = ">=3.9"
+dependencies = ["numpy", "Pillow"]
+
+[project.scripts]
+gtatools = "gtatools.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
