@@ -1,0 +1,71 @@
+{
+  "format": 1,
+  "title": {
+    "en": "wokken198 plugins",
+    "zh": "wokken198 的插件"
+  },
+  "description": {
+    "en": "Small tools by wokken198 and friends. No game assets; every tool reads from your own install.",
+    "zh": "wokken198 的小工具。不含任何游戏资产，全部读取你自己的安装。"
+  },
+  "metadata": {
+    "categories": {
+      "modding": {
+        "title": {
+          "en": "Game modding",
+          "zh": "游戏模组"
+        }
+      }
+    },
+    "labels": {},
+    "sortKeys": {}
+  },
+  "plugins": [
+    {
+      "name": "dsh-gta-tools",
+      "title": {
+        "en": "GTA V texture tools",
+        "zh": "GTA V 贴图工具"
+      },
+      "description": {
+        "en": "Badge to normal map, .ymt variation audit, batch DDS rescale and descriptor-safe .ytd repack, as four agent tools. GTA V Legacy and Enhanced.",
+        "zh": "车标转法线、.ymt 变体审计、批量 DDS 缩放、保留渲染目标描述符的 .ytd 重打包，共四个代理工具。支持 GTA V 旧版与增强版。"
+      },
+      "icon": "https://cdn.jsdelivr.net/gh/wokken198/gtav-toolkit@main/dsh-plugin/icon.svg",
+      "author": "wokken198",
+      "homepage": "https://github.com/wokken198/gtav-toolkit",
+      "repository": {
+        "url": "https://github.com/wokken198/gtav-toolkit",
+        "directory": "dsh-plugin"
+      },
+      "metadata": {
+        "category": "modding",
+        "keywords": [
+          "gta5",
+          "dds",
+          "normal-map",
+          "ytd",
+          "rpf",
+          "codewalker",
+          "legacy",
+          "gen9"
+        ],
+        "labels": [],
+        "sortKeys": {}
+      },
+      "versions": [
+        {
+          "version": "0.1.0",
+          "publishTimestamp": 1795137381,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/wokken198/gtav-toolkit",
+            "commit": "04f7cf8f3a1d9c3429824ec97030ef1823ea820a",
+            "path": "dsh-plugin"
+          },
+          "engines": {}
+        }
+      ]
+    }
+  ]
+}

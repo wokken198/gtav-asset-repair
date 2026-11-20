@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/wokken198/gtav-toolkit/actions/workflows/tests.yml/badge.svg)](https://github.com/wokken198/gtav-toolkit/actions/workflows/tests.yml)
 
-Small, focused helpers for GTA V (Enhanced / gen9) texture and ped-variation work. Four commands, one CLI:
+Small, focused helpers for GTA V (Legacy and Enhanced / gen9) texture and ped-variation work. Four commands, one CLI:
 
 | command | what it does |
 |---|---|
@@ -26,6 +26,20 @@ No game assets are included; everything reads from your own install.
 
 Zero failures across those batches, and a pack → export → compare round trip came back
 byte-identical on the sampled files.
+
+## Game versions
+
+`normals` and `scale` are version-agnostic: they take DDS files and the rules they encode (DXT1/5,
+BC7/BC5, full mip chains, dimensions rounded to 4) are the same in Legacy and Enhanced.
+
+`pack` is where the two games differ:
+
+- **Enhanced (gen9)** archives are RSC7 version 5. That is the default; add `--original` to restore
+  the `script_rt_*` render-target descriptors that CodeWalker's XML export drops.
+- **Legacy** archives are RSC7 version 13. Pass `--legacy`. Those `G9_*` descriptor fields do not
+  exist there, so `--original` is not needed for them.
+- Legacy `.ydd` XML round trips silently lose meshes (the exporter writes `<Data2>`, the importer
+  reads `<Data>`), so merge legacy peds from the binary files rather than from XML.
 
 ## Install
 
