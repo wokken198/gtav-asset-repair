@@ -31,6 +31,7 @@ def cmd_normals(args) -> int:
         print("no badge diffuse found under", args.src)
         return 1
 
+    src_root = args.src if os.path.isdir(args.src) else os.path.dirname(args.src) or "."
     work = args.work or os.path.join(args.out, "_work")
     os.makedirs(work, exist_ok=True)
     by_dir: dict[str, list[str]] = {}
@@ -40,10 +41,14 @@ def cmd_normals(args) -> int:
     rows = []
     made = 0
     for d, group in sorted(by_dir.items()):
-        png_dir = os.path.join(work, os.path.basename(d))
+        rel = os.path.relpath(d, src_root)
+        tag = "root" if rel in (".", "") else rel.replace("\\", "/")
+        rel_dir = "" if rel in (".", "") else rel
+        png_dir = os.path.join(work, tag)
         dds_files = [f for f in group if f.lower().endswith(".dds")]
         if dds_files:
             dds.decode(png_dir, dds_files, args.texconv)
+        out_dir = os.path.join(args.out, rel_dir) if rel_dir else args.out
         for f in group:
             base = os.path.splitext(os.path.basename(f))[0]
             png = os.path.join(png_dir, base + ".png")
@@ -53,11 +58,10 @@ def cmd_normals(args) -> int:
             rgba = normals.load_rgba(png)
             h = normals.height_field(rgba, blur=args.blur)
             n = normals.normal_from_height(h, strength=args.strength)
-            out_dir = os.path.join(args.out, os.path.basename(d))
             npath = os.path.join(png_dir, base + "_n.png")
             from PIL import Image
             Image.fromarray(n, "RGB").save(npath)
-            mips = min(max(1, int(max(n.shape[:2]).bit_length()) - 1), args.max_mips)
+            mips = min(max(1, int(max(n.shape[:2]).bit_length())), args.max_mips)
             dds.encode(npath, args.fmt, mips, out_dir, args.texconv)
             made += 1
             if args.sheet and len(rows) < args.sheet_rows:
@@ -131,7 +135,7 @@ def cmd_scale(args) -> int:
             png = os.path.join(png_dir, stem + ".png")
             resized = os.path.join(png_dir, f"{stem}_{tw}x{th}.png")
             dds.resize_rgba(png, (tw, th), resized)
-            mips = min(h.mips, max(1, int(max(tw, th).bit_length()) - 1))
+            mips = min(h.mips, max(1, int(max(tw, th).bit_length())))
             out_dir = os.path.join(args.out, sub)
             made = dds.encode(resized, h.texconv_fmt, mips, out_dir, args.texconv)
             final = os.path.join(out_dir, os.path.basename(p))

@@ -41,6 +41,12 @@ BC7/BC5, full mip chains, dimensions rounded to 4) are the same in Legacy and En
 - Legacy `.ydd` XML round trips silently lose meshes (the exporter writes `<Data2>`, the importer
   reads `<Data>`), so merge legacy peds from the binary files rather than from XML.
 
+## Docs
+
+Start at [docs/README.md](docs/README.md) for a one-table map of the repository: which page to read for
+the CLI, for the DeepSeek Harness bundle, for the market index, and for the pitfalls below. The bundle's
+internals are described in [dsh-plugin/docs/DETAIL.md](dsh-plugin/docs/DETAIL.md).
+
 ## Install
 
 ```bash
@@ -224,7 +230,8 @@ src/gtatools/       cli.py, dds.py, normals.py, ymt.py, cw.py
 tests/              test_core.py
 resources/          pack_ytd.ps1
 dsh-plugin/         DSH bundle (index.js, locale/, vendor/gtatools, icon.svg)
-docs/images/        README artwork
+market/             market index entry
+docs/               docs/README.md and docs/images/ artwork
 .github/            tests workflow
 ```
 

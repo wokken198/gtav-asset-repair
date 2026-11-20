@@ -1,0 +1,43 @@
+# Changelog
+
+All notable changes to this project are recorded here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
+[semantic versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.1.1] - 2026-11-20
+
+### Fixed
+
+- `normals` and `scale` produced one mip level too few on power-of-two textures: a 256-wide atlas came
+  out with 8 levels instead of 9. The cap now uses the full chain length, so output matches the source
+  texture for every size.
+- `normals` nested its output one directory too deep when `--src` pointed at a folder: the folder's own
+  name was used as an output subdirectory. Output now only mirrors subdirectories that actually exist
+  below the given root.
+
+### Added
+
+- `docs/README.md` — a one-table entry point that maps "what you want to do" to the page that covers it,
+  plus the repository layout and the rule that `src/gtatools` and `dsh-plugin/vendor/gtatools` stay
+  byte-identical.
+- README: a `Docs` section pointing at that entry point and at `dsh-plugin/docs/DETAIL.md`; `Layout`
+  now lists `market/` and `docs/`.
+- `dsh-plugin/docs/DETAIL.md`: an `Installing from the market index` section, and a note that the page
+  covers the bundle while command-line behaviour lives in the README.
+
+## [0.1.0] - 2026-11-19
+
+### Added
+
+- `gtatools normals` — badge diffuse to tangent-space normal map, with margin flattening and an optional
+  contact sheet.
+- `gtatools audit` — `CPedVariationInfo` consistency checks against the rules vanilla peds follow.
+- `gtatools scale` — DDS resizing that keeps pixel format and mip depth, resampling RGB and alpha
+  separately.
+- `gtatools pack` — build a `.ytd` from a CodeWalker XML export, optionally restoring the gen9
+  render-target descriptors that the XML does not carry.
+- `dsh-plugin/` — the same four operations as DeepSeek Harness tools, with the Python package vendored
+  so nothing needs to be installed.
+- `market/index.json` — a market index entry that pins a commit.
