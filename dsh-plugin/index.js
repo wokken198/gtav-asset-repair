@@ -31,6 +31,8 @@ function pythonCandidates() {
 	return list;
 }
 
+const PROBE = "import sys, numpy, PIL; print(sys.executable)";
+
 let resolved = null;
 
 function spawnOnce(python, argv, timeoutMs) {
@@ -47,8 +49,9 @@ function spawnOnce(python, argv, timeoutMs) {
 
 async function resolvePython() {
 	if (resolved !== null) return resolved;
+	const missingDeps = [];
 	for (const candidate of pythonCandidates()) {
-		const probe = await spawnOnce(candidate, ["-c", "import sys;print(sys.executable)"], 20000);
+		const probe = await spawnOnce(candidate, ["-c", PROBE], 30000);
 		if (probe.error && probe.error.code === "ENOENT") continue;
 		const blob = `${probe.stdout}\n${probe.stderr}`;
 		if (blob.includes(STORE_STUB)) continue;
@@ -56,6 +59,15 @@ async function resolvePython() {
 			resolved = candidate;
 			return candidate;
 		}
+		if (blob.includes("ModuleNotFoundError") || blob.includes("No module named")) {
+			missingDeps.push(candidate[0]);
+		}
+	}
+	if (missingDeps.length > 0) {
+		throw new Error(
+			`python found but numpy/Pillow are missing: ${missingDeps.join(", ")}. ` +
+				"Run `pip install numpy pillow` for that interpreter, or point GTA_TOOLS_PYTHON at a python that has them.",
+		);
 	}
 	throw new Error("no working python found; set GTA_TOOLS_PYTHON to a python executable");
 }
