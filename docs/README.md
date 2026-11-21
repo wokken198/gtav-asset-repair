@@ -10,6 +10,7 @@ Where to look, depending on what you are trying to do.
 | see how the bundle is wired together | [dsh-plugin/docs/DETAIL.md](../dsh-plugin/docs/DETAIL.md) |
 | add this repository as a DSH market index | `https://cdn.jsdelivr.net/gh/wokken198/gtav-toolkit@main/market/index.json` |
 | avoid the mistakes this repo exists to document | [README § Known pitfalls](../README.md#known-pitfalls-this-repo-encodes) |
+| understand why textures shimmer in the distance (missing mip levels) | [why-mips.md](why-mips.md) |
 | see what changed in each version | [CHANGELOG.md](../CHANGELOG.md) |
 
 ## Repository layout
