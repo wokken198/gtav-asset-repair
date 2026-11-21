@@ -32,6 +32,13 @@ are closer together than one screen pixel at that distance, so it collapses into
 grey blob whether or not a chain exists. **That is a resolution limit, not a
 filtering one** — mips cannot invent detail that the screen has no room for.
 
+![the two Ms, at 100%, 25% and 12% — both columns end up as the same grey mush](images/mips-dense.png)
+
+Both columns degrade the same way once the strokes fall below a pixel: the left one
+boils, the right one goes soft, and neither reads as two Ms. If a badge has to stay
+legible far away, the answer is fewer/simpler strokes or a bigger on-screen size,
+not a better chain.
+
 In motion it is worse than "noisy" — it *boils*:
 
 ![same sub-pixel motion, 1 mip level on the left, full chain on the right](images/mips-shimmer.gif)

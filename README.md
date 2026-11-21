@@ -236,6 +236,27 @@ docs/               docs/README.md and docs/images/ artwork
 .github/            tests workflow
 ```
 
+## Building on this
+
+You are welcome to put a UI, a GUI wrapper, or a fork on top of this code — a
+standalone desktop app for badge work is an obvious next step, and this repository
+is meant to be the engine for it.
+
+If you reuse the code, **keep the copyright notice and say where it came from**,
+e.g.:
+
+> Badge handling based on [gtav-toolkit](https://github.com/wokken198/gtav-toolkit)
+> by wokken198, MIT licensed.
+
+That attribution requirement is the one thing the MIT license already asks for
+(keep the notice); the link back is courtesy, and it is how people find the
+original when they need the CLI or the fixes. Forking, renaming, adding a GUI,
+using only the normal-map maths, or wrapping the CLI in your own app are all fine.
+
+Not fine: shipping the bundled `dsh-plugin/`, or a copy of this code, without the
+notice; or redistributing game assets (`.dds`, `.ytd`, `.ydd`, `.ymt`, brand art)
+as if they were yours — none of those are in this repository to begin with.
+
 ## License
 
 MIT for the code. Game-derived assets are not covered and are not shipped here.
