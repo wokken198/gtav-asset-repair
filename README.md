@@ -136,7 +136,9 @@ gtatools ytd list cars/*.ytd --json
 ```
 
 Reads a texture dictionary and prints one line per texture: name, size, format, mips. `--only` filters
-by substring, `--json` is for scripting. Needs CodeWalker (`CodeWalker.Core.dll`); nothing is written.
+by substring. `--json` alone prints JSON to stdout, `--json out.json` writes a file — the same convention
+`audit` and `mips check` use. Needs CodeWalker (`CodeWalker.Core.dll`); nothing is written. Exit code `2`
+if an archive cannot be read.
 
 ## mips check
 
@@ -153,9 +155,9 @@ a build. See [docs/why-mips.md](docs/why-mips.md) for the long version.
 
 ## Use it as a DeepSeek Harness plugin
 
-`dsh-plugin/` is an installable DSH bundle that exposes the same four operations as agent tools
-(`gta_badge_normal`, `gta_ymt_audit`, `gta_ytd_scale`, `gta_ytd_pack`). The Python package is vendored
-inside, so nothing needs to be pip-installed.
+`dsh-plugin/` is an installable DSH bundle that exposes the same six operations as agent tools
+(`gta_badge_normal`, `gta_ymt_audit`, `gta_ytd_scale`, `gta_ytd_pack`, `gta_ytd_list`, `gta_mips_check`).
+The Python package is vendored inside, so nothing needs to be pip-installed.
 
 ### Prerequisites
 
@@ -202,15 +204,16 @@ Environment variables (optional; set before launching DSH):
 |---|---|
 | `GTA_TOOLS_PYTHON` | python executable; when unset the plugin probes `python3`, `python`, then the Python bundled with DeepSeek Harness |
 | `GTA_TOOLS_TEXCONV` | path to `texconv.exe`; when unset it is looked up on `PATH` and in the working directory's parents |
-| `GTA_TOOLS_CW` | CodeWalker folder holding `CodeWalker.Core.dll`; when unset the plugin probes `GTA_TOOLS_CW`/`CODEWALKER_DIR`, common install locations, Desktop, and the working directory's parents. Only `gta_ytd_pack` needs it |
+| `GTA_TOOLS_CW` | CodeWalker folder holding `CodeWalker.Core.dll`; when unset the plugin probes `GTA_TOOLS_CW`/`CODEWALKER_DIR`, common install locations, Desktop, and the working directory's parents. `gta_ytd_pack`, `gta_ytd_list` and `gta_mips_check` need it |
 
 ### After installing
 
 1. The Plugins list shows **GTA V texture tools**.
 2. Smoke test from any session — ask the agent to run `gta_ytd_scale` on a folder of DDS with a small
-   target size, or `gta_ymt_audit` on an exported ped `.ymt.xml`. A table with no errors means the
-   Python side is wired up.
-3. Tool names: `gta_badge_normal`, `gta_ymt_audit`, `gta_ytd_scale`, `gta_ytd_pack`.
+   target size, `gta_ytd_list` on a `.ytd`, or `gta_ymt_audit` on an exported ped `.ymt.xml`. A table
+   with no errors means the Python side is wired up.
+3. Tool names: `gta_badge_normal`, `gta_ymt_audit`, `gta_ytd_scale`, `gta_ytd_pack`, `gta_ytd_list`,
+   `gta_mips_check`.
 
 ### Troubleshooting
 

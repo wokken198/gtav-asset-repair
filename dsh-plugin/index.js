@@ -188,4 +188,50 @@ export function apply(ctx) {
 			},
 		),
 	);
+
+	ctx.tools.register(
+		tool(
+			"gta_ytd_list",
+			"List the textures inside one or more .ytd texture dictionaries without modifying them: name, size, format and mip count. Reads through CodeWalker, so it needs CodeWalker.Core.dll (auto-detected, or set GTA_TOOLS_CW).",
+			{
+				files: {
+					type: "array",
+					items: { type: "string" },
+					description: "One or more .ytd files",
+				},
+				only: stringProp("Only show texture names containing this substring, e.g. badge"),
+			},
+			["files"],
+			async (args) => {
+				const argv = ["ytd", "list", ...args.files];
+				if (args.only !== undefined) argv.push("--only", args.only);
+				const core = coreDir();
+				if (core.length > 0) argv.push("--core-dir", core);
+				return clip(await run(argv, 300000));
+			},
+		),
+	);
+
+	ctx.tools.register(
+		tool(
+			"gta_mips_check",
+			"Report .ytd / .dds textures whose mip chain is shorter than floor(log2(long edge)) + 1. Short chains shimmer as soon as the camera moves; this returns mips/expected per texture and exits non-zero when anything is incomplete.",
+			{
+				paths: {
+					type: "array",
+					items: { type: "string" },
+					description: "Files or folders to scan (.dds and .ytd)",
+				},
+				all: { type: "boolean", description: "Also list the textures whose chains are complete" },
+			},
+			["paths"],
+			async (args) => {
+				const argv = ["mips", "check", ...args.paths];
+				if (args.all === true) argv.push("--all");
+				const core = coreDir();
+				if (core.length > 0) argv.push("--core-dir", core);
+				return clip(await run(argv, 300000));
+			},
+		),
+	);
 }

@@ -6,6 +6,8 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-22
+
 ### Added
 
 - `gtatools ytd list` — read-only dump of a texture dictionary (name, size, format, mips) through
@@ -14,7 +16,18 @@ All notable changes to this project are recorded here. The format follows
   `floor(log2(long edge)) + 1`. `.dds` headers are parsed in pure Python; `.ytd` goes through
   CodeWalker. Exit code `2` when something is incomplete, so it can gate a build.
 - `resources/ytd_inspect.ps1` — the CodeWalker bridge behind both commands.
+- plugin: `gta_ytd_list` and `gta_mips_check` agent tools, so the bundle now mirrors all six CLI
+  operations.
 - docs: `docs/why-mips.md` explains the shimmer, with a cropped before/after figure and a GIF.
+
+### Changed
+
+- `--json` now means the same thing everywhere: bare `--json` prints JSON to stdout, `--json PATH`
+  writes a file. Previously the three commands disagreed.
+- `scale` no longer upscales: a target long edge at or above the source size counts as skipped.
+- `normals` / `pack` / `audit` report a readable error instead of a traceback when a path is missing;
+  `ytd list` exits `2` when any archive could not be read.
+
 
 ## [0.1.1] - 2026-11-20
 
