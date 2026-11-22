@@ -6,6 +6,8 @@ Where to look, depending on what you are trying to do.
 |---|---|
 | understand what the toolkit does, then install it | [README](../README.md) |
 | run one command and see what happens | [README § normals](../README.md#normals), then `audit`, `scale`, `pack` |
+| use a window instead of the command line | [README → GUI](../README.md#gui) |
+| build the Windows exe | [README → GUI](../README.md#gui) |
 | install the DeepSeek Harness bundle | [README § Use it as a DeepSeek Harness plugin](../README.md#use-it-as-a-deepseek-harness-plugin) |
 | see how the bundle is wired together | [dsh-plugin/docs/DETAIL.md](../dsh-plugin/docs/DETAIL.md) |
 | add this repository as a DSH market index | `https://cdn.jsdelivr.net/gh/wokken198/gtav-toolkit@main/market/index.json` |
@@ -20,6 +22,8 @@ Where to look, depending on what you are trying to do.
 ```
 src/gtatools/          the Python package (cli, dds, normals, ymt, ytd, cw)
 tests/                 unittest suite, no game files required
+packaging/gui_entry.py PyInstaller entry point for the GUI
+resources/gtatools.ico window icon, generated, brand-free
 resources/pack_ytd.ps1 the CodeWalker bridge used by `gtatools pack`
 resources/ytd_inspect.ps1  the CodeWalker bridge used by `ytd list` and `mips check`
 dsh-plugin/            the installable DeepSeek Harness bundle
