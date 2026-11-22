@@ -191,15 +191,16 @@ To build the Windows exe:
 ```bash
 pip install pyinstaller
 pyinstaller --noconfirm --clean --onefile --windowed --name gtatools \
+  --runtime-tmpdir . \
   --icon resources/gtatools.ico \
   --add-binary "texconv.exe;." \
   --add-data "resources/gtatools.ico;resources" \
   --paths src --hidden-import PIL.ImageTk packaging/gui_entry.py
 ```
 
-The one-file build unpacks itself into `%TEMP%` on every start; if a machine blocks
-that (security software, controlled folder access) build `--onedir` instead - it starts
-from its own folder and never touches the temp directory.
+The one-file build unpacks itself next to the exe (`--runtime-tmpdir .`), so it starts
+even where `%TEMP%` is locked down; keep it in a folder you can write to. For a build that
+never unpacks anything, use `--onedir` instead.
 
 ## Use it as a DeepSeek Harness plugin
 
