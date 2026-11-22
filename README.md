@@ -306,7 +306,8 @@ python -m unittest discover -s tests -v
 src/gtatools/       cli.py, dds.py, normals.py, ymt.py, cw.py, ytd.py, gui.py
 tests/              test_core.py
 resources/          pack_ytd.ps1
-dsh-plugin/          DSH bundle (six agent tools, vendored gtatools)         DSH bundle (index.js, locale/, vendor/gtatools, icon.svg)
+dsh-plugin/         DSH bundle (six agent tools, index.js, locale/, vendor/gtatools, icon.svg)
+packaging/          PyInstaller entry point for the GUI
 market/             market index entry
 docs/               docs/README.md and docs/images/ artwork
 .github/            tests workflow
