@@ -49,7 +49,7 @@ BC7/BC5, full mip chains, dimensions rounded to 4) are the same in Legacy and En
 
 Start at [docs/README.md](docs/README.md) for a one-table map of the repository: which page to read for
 the CLI, for the DeepSeek Harness bundle, for the market index, and for the pitfalls below. The bundle's
-internals are described in [dsh-plugin/docs/DETAIL.md](dsh-plugin/docs/DETAIL.md).
+internals are described in [dsh-plugin/          DSH bundle (six agent tools, vendored gtatools)docs/DETAIL.md](dsh-plugin/          DSH bundle (six agent tools, vendored gtatools)docs/DETAIL.md).
 
 ## Install
 
@@ -169,9 +169,41 @@ camera moves. This subcommand reports `mips/expected` per texture; `.dds` files 
 Python, `.ytd` files go through CodeWalker. Exit code `2` when anything is incomplete, so it can gate
 a build. See [docs/why-mips.md](docs/why-mips.md) for the long version.
 
+## GUI
+
+A small desktop window ships next to the CLI, for people who would rather not type:
+
+![gtatools GUI, light theme](docs/images/gui-light.png)
+
+![gtatools GUI, dark theme](docs/images/gui-dark.png)
+
+- pick files, or a whole folder (it walks subdirectories for `*.dds`)
+- strength / blur / alpha weight sliders, format, resize and mip options
+- a live preview: diffuse, generated normal, and a shaded result
+- batch run with a progress bar, per-file log and cancel
+- output lands in `normals\` next to each input, so nothing is overwritten
+- English / Chinese and light / dark, switchable in the header; the last choice is remembered
+- texconv.exe is bundled in the packaged build, so it needs no Python and no setup
+
+Run it from a checkout with `python -m gtatools.gui` (or `gtatools-gui` after `pip install -e .`).
+To build the Windows exe:
+
+```bash
+pip install pyinstaller
+pyinstaller --noconfirm --clean --onefile --windowed --name gtatools \
+  --icon resources/gtatools.ico \
+  --add-binary "texconv.exe;." \
+  --add-data "resources/gtatools.ico;resources" \
+  --paths src --hidden-import PIL.ImageTk packaging/gui_entry.py
+```
+
+The one-file build unpacks itself into `%TEMP%` on every start; if a machine blocks
+that (security software, controlled folder access) build `--onedir` instead - it starts
+from its own folder and never touches the temp directory.
+
 ## Use it as a DeepSeek Harness plugin
 
-`dsh-plugin/` is an installable DSH bundle that exposes the same six operations as agent tools
+`dsh-plugin/          DSH bundle (six agent tools, vendored gtatools)` is an installable DSH bundle that exposes the same six operations as agent tools
 (`gta_badge_normal`, `gta_ymt_audit`, `gta_ytd_scale`, `gta_ytd_pack`, `gta_ytd_list`, `gta_mips_check`).
 The Python package is vendored inside, so nothing needs to be pip-installed.
 
@@ -271,10 +303,10 @@ python -m unittest discover -s tests -v
 ## Layout
 
 ```
-src/gtatools/       cli.py, dds.py, normals.py, ymt.py, cw.py
+src/gtatools/       cli.py, dds.py, normals.py, ymt.py, cw.py, ytd.py, gui.py
 tests/              test_core.py
 resources/          pack_ytd.ps1
-dsh-plugin/         DSH bundle (index.js, locale/, vendor/gtatools, icon.svg)
+dsh-plugin/          DSH bundle (six agent tools, vendored gtatools)         DSH bundle (index.js, locale/, vendor/gtatools, icon.svg)
 market/             market index entry
 docs/               docs/README.md and docs/images/ artwork
 .github/            tests workflow
@@ -297,7 +329,7 @@ That attribution requirement is the one thing the MIT license already asks for
 original when they need the CLI or the fixes. Forking, renaming, adding a GUI,
 using only the normal-map maths, or wrapping the CLI in your own app are all fine.
 
-Not fine: shipping the bundled `dsh-plugin/`, or a copy of this code, without the
+Not fine: shipping the bundled `dsh-plugin/          DSH bundle (six agent tools, vendored gtatools)`, or a copy of this code, without the
 notice; or redistributing game assets (`.dds`, `.ytd`, `.ydd`, `.ymt`, brand art)
 as if they were yours — none of those are in this repository to begin with.
 

@@ -4,6 +4,31 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-11-22
+
+### Added
+
+- A desktop GUI (`python -m gtatools.gui`): pick files or a folder, tune strength,
+  blur, alpha weight, format, resize and mip depth, preview the result, run a batch
+  with progress and cancel, and write `normals\<name>_n.dds` next to each input.
+- English / Chinese and light / dark themes, remembered in `%APPDATA%\gtatools\gui.json`.
+- `gtatools-gui` console entry point, `packaging/gui_entry.py` for PyInstaller, and
+  `resources/gtatools.ico`.
+- `--work` / `--scratch` driven output layout shared by the CLI and the GUI.
+- `ytd list` and `mips check` gained the same `--json PATH` / stdout behaviour.
+
+### Fixed
+
+- `height_field()` is now alpha-gated (`alpha * (luma_weight * lum + mask_weight)`), so
+  transparent regions no longer show up as a rectangular step in the normal map.
+- `ytd list --legacy` on a gen9 archive reports a warning instead of silently printing
+  zeroed sizes.
+- `scale` no longer upscales; targets at or above the source size count as skipped.
+
+### Changed
+
+- Version bumped to 0.4.0; the DSH bundle now exposes six tools.
+
 ## [0.3.0] - 2026-11-22
 
 ### Added

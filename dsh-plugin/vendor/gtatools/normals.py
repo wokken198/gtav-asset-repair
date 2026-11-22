@@ -30,7 +30,8 @@ def height_field(rgba: np.ndarray, luma_weight: float = 0.7, mask_weight: float 
         inside = alpha > 0.09
         lo, hi = np.percentile(luma[inside], [5, 95]) if inside.sum() > 32 else (0.0, 1.0)
         lum = np.clip((luma - lo) / max(hi - lo, 1e-3), 0, 1)
-        h = luma_weight * lum + mask_weight * alpha
+        # alpha-gated height: transparent pixels stay flat instead of forming a box
+        h = alpha * (luma_weight * lum + mask_weight)
     else:
         h = luma
     h = np.clip(h, 0, 1)

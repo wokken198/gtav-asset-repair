@@ -9,3 +9,7 @@ _demo/
 *.ymt
 *.rpf
 out/
+build/
+dist/
+*.spec
+.gtatools_tmp/

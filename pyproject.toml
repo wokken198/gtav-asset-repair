@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gtatools"
-version = "0.3.0"
+version = "0.4.0"
 description = "Small GTA V asset helpers: badge normal maps, CPedVariationInfo auditing, DDS rescaling, YTD packing"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -32,6 +32,7 @@ dev = ["pytest"]
 
 [project.scripts]
 gtatools = "gtatools.cli:main"
+gtatools-gui = "gtatools.gui:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
