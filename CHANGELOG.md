@@ -20,6 +20,11 @@ All notable changes to this project are recorded here. The format follows
   operations.
 - docs: `docs/why-mips.md` explains the shimmer, with a cropped before/after figure and a GIF.
 
+### Fixed
+
+- `ytd list` / `mips check` now warn when `--legacy` disagrees with the archive's RSC7 header instead
+  of silently printing zeroed sizes. `ytd.rsc7_version()` exposes the check.
+
 ### Changed
 
 - `--json` now means the same thing everywhere: bare `--json` prints JSON to stdout, `--json PATH`
@@ -27,7 +32,6 @@ All notable changes to this project are recorded here. The format follows
 - `scale` no longer upscales: a target long edge at or above the source size counts as skipped.
 - `normals` / `pack` / `audit` report a readable error instead of a traceback when a path is missing;
   `ytd list` exits `2` when any archive could not be read.
-
 
 ## [0.1.1] - 2026-11-20
 

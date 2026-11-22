@@ -176,6 +176,21 @@ class TestYtd(unittest.TestCase):
         info = ytd.YtdInfo("broken.ytd", [], error="not an RSC7 file")
         self.assertIn("not an RSC7 file", ytd.format_table([info]))
 
+    def test_rsc7_version(self):
+        p = os.path.join(scratch("rsc7"), "v.ytd")
+        with open(p, "wb") as fh:
+            fh.write(b"RSC7" + struct.pack("<I", 5) + b"\x00" * 8)
+        self.assertEqual(ytd.rsc7_version(p), 5)
+        q = os.path.join(scratch("rsc7"), "plain.bin")
+        with open(q, "wb") as fh:
+            fh.write(b"nope")
+        self.assertIsNone(ytd.rsc7_version(q))
+
+    def test_warning_shows_in_table(self):
+        info = ytd.YtdInfo("a.ytd", [ytd.Texture("t", 256, 128, "DXT5", 9)],
+                           warning="this archive is gen9")
+        self.assertIn("warning: this archive is gen9", ytd.format_table([info]))
+
 
 if __name__ == "__main__":
     unittest.main()

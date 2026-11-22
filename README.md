@@ -40,7 +40,8 @@ BC7/BC5, full mip chains, dimensions rounded to 4) are the same in Legacy and En
 - **Enhanced (gen9)** archives are RSC7 version 5. That is the default; add `--original` to restore
   the `script_rt_*` render-target descriptors that CodeWalker's XML export drops.
 - **Legacy** archives are RSC7 version 13. Pass `--legacy`. Those `G9_*` descriptor fields do not
-  exist there, so `--original` is not needed for them.
+  exist there, so `--original` is not needed for them. `ytd list` and `mips check` read the RSC7 header
+  and warn when the flag disagrees with the file — parsing a gen9 archive as legacy yields zeroed sizes.
 - Legacy `.ydd` XML round trips silently lose meshes (the exporter writes `<Data2>`, the importer
   reads `<Data>`), so merge legacy peds from the binary files rather than from XML.
 
