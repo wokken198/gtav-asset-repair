@@ -64,6 +64,21 @@ Python 3.9+, `numpy`, `Pillow`. Two optional dependencies, needed only by the co
 - **CodeWalker.Core.dll** (dev48+) plus Windows PowerShell — required by `pack`; located through
   `--core-dir`, `GTA_TOOLS_CW`, or the common-install probe described below.
 
+## One folder for a whole run
+
+Pass `--work DIR` (before or after the command) and every default output lands below that folder, so a
+job leaves nothing scattered in the current directory:
+
+```bash
+gtatools --work "D:\mods\NEW" normals "D:\mods\NEW\badges" --sheet "D:\mods\NEW\sheet.png"
+# outputs: D:\mods\NEW\normals\
+#          D:\mods\NEW\scaled\      (scale)
+#          D:\mods\NEW\packed\      (pack, when --out is omitted)
+```
+
+Inputs can live anywhere; only the *outputs* are anchored to `--work`. Explicit `--out` / `--json`
+arguments still win, so nothing changes for scripts that already pass paths.
+
 ## normals
 
 ```bash

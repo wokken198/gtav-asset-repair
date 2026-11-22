@@ -4,7 +4,15 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-11-22
+
+### Added
+
+- `--work DIR` for every command: default outputs go to `<DIR>/normals`, `<DIR>/scaled` and
+  `<DIR>/packed`. Explicit `--out` / `--json` still override it, so existing scripts keep working.
+- `pack --out` is now optional: omitting it writes `<work>/packed/<xml stem>.ytd`.
+- `normals --scratch` (was `--work`) names the folder for decoded PNGs, avoiding a clash with the new
+  global flag.
 
 ## [0.2.0] - 2026-11-22
 

@@ -8,7 +8,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "src"))
 
-from gtatools import dds, normals, ymt, ytd  # noqa: E402
+from gtatools import cli, dds, normals, ymt, ytd  # noqa: E402
 
 TMP = os.path.join(HERE, "_tmp")
 os.makedirs(TMP, exist_ok=True)
@@ -194,3 +194,28 @@ class TestYtd(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorkDirTest(unittest.TestCase):
+    def test_work_before_and_after_subcommand(self):
+        parser = cli.build_parser()
+        a = parser.parse_args(["--work", "D:/x", "normals", "in"])
+        self.assertEqual(a.work, "D:/x")
+        b = parser.parse_args(["normals", "in", "--work", "D:/y"])
+        self.assertEqual(b.work, "D:/y")
+
+    def test_work_path_defaults(self):
+        old = cli.WORK
+        try:
+            cli.WORK = r"D:\mods\NEW"
+            self.assertTrue(cli.work_path("normals").startswith(cli.WORK))
+            self.assertEqual(str(cli.work_path("normals")).find("normals") > 0, True)
+            cli.WORK = ""
+            self.assertEqual(cli.work_path("packed", "a.ytd").find("packed") > 0, True)
+        finally:
+            cli.WORK = old
+
+    def test_pack_out_is_optional(self):
+        parser = cli.build_parser()
+        a = parser.parse_args(["pack", "--xml", "a.ytd.xml", "--build", "b"])
+        self.assertEqual(a.out, "")

@@ -14,6 +14,21 @@ DEFAULT_TEXCONV = os.environ.get("TEXCONV", "texconv.exe")
 DEFAULT_PS1 = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                            "resources", "pack_ytd.ps1")
 
+# Set by --work. Every default output path lives below it, so the whole run stays in one folder.
+WORK = ""
+
+
+def work_path(*parts: str) -> str:
+    """Resolve a default output path under --work (or the current directory)."""
+    base = WORK or os.getcwd()
+    return os.path.join(base, *parts)
+
+
+def ensure_dir(path: str) -> str:
+    if path:
+        os.makedirs(path, exist_ok=True)
+    return path
+
 
 def _emit_json(payload, target: str) -> bool:
     """Write `payload` to `target`; "-" means stdout. Returns True when it went to stdout."""
@@ -47,7 +62,8 @@ def cmd_normals(args) -> int:
         return 1
 
     src_root = args.src if os.path.isdir(args.src) else os.path.dirname(args.src) or "."
-    work = args.work or os.path.join(args.out, "_work")
+    out_root = args.out or work_path("normals")
+    work = args.scratch or os.path.join(out_root, "_work")
     os.makedirs(work, exist_ok=True)
     by_dir: dict[str, list[str]] = {}
     for f in candidates:
@@ -63,7 +79,7 @@ def cmd_normals(args) -> int:
         dds_files = [f for f in group if f.lower().endswith(".dds")]
         if dds_files:
             dds.decode(png_dir, dds_files, args.texconv)
-        out_dir = os.path.join(args.out, rel_dir) if rel_dir else args.out
+        out_dir = os.path.join(out_root, rel_dir) if rel_dir else out_root
         for f in group:
             base = os.path.splitext(os.path.basename(f))[0]
             png = os.path.join(png_dir, base + ".png")
@@ -132,8 +148,9 @@ def cmd_scale(args) -> int:
         print("no dds found")
         return 1
 
-    os.makedirs(args.out, exist_ok=True)
-    work = os.path.join(args.out, "_work")
+    out_root = args.out or work_path("scaled")
+    os.makedirs(out_root, exist_ok=True)
+    work = os.path.join(out_root, "_work")
     ok, skipped, failed = 0, 0, 0
     for p, sub in jobs:
         try:
@@ -160,7 +177,7 @@ def cmd_scale(args) -> int:
             resized = os.path.join(png_dir, f"{stem}_{tw}x{th}.png")
             dds.resize_rgba(png, (tw, th), resized)
             mips = min(h.mips, max(1, int(max(tw, th).bit_length())))
-            out_dir = os.path.join(args.out, sub)
+            out_dir = os.path.join(out_root, sub)
             made = dds.encode(resized, h.texconv_fmt, mips, out_dir, args.texconv)
             final = os.path.join(out_dir, os.path.basename(p))
             if os.path.normcase(made) != os.path.normcase(final):
@@ -179,6 +196,12 @@ def cmd_pack(args) -> int:
         if not os.path.exists(path):
             print(f"no such {label} path: {path}", file=sys.stderr)
             return 1
+    if not args.out:
+        stem = os.path.splitext(os.path.basename(args.xml))[0]
+        if stem.endswith(".ytd"):
+            stem = stem[:-4]
+        args.out = work_path("packed", stem + ".ytd")
+        ensure_dir(os.path.dirname(args.out))
     core = cw.find_corewalker(args.core_dir, start=os.path.dirname(os.path.abspath(args.xml)))
     if core is None:
         print(cw.MISSING_HINT, file=sys.stderr)
@@ -278,14 +301,20 @@ def cmd_mips_check(args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="gtatools", description="GTA V asset helpers")
+    p.add_argument("--work", default="",
+                   help="working folder; every default output goes below it")
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--work", default=argparse.SUPPRESS,
+                        help="working folder; every default output goes below it")
 
     json_help = "write JSON here; bare --json prints it to stdout"
 
-    n = sub.add_parser("normals", help="badge diffuse -> normal map (DDS)")
+    n = sub.add_parser("normals", parents=[common], help="badge diffuse -> normal map (DDS)")
     n.add_argument("src", help="DDS/PNG file, or a folder searched recursively")
-    n.add_argument("--out", default="out", help="output folder (mirrors the input tree)")
-    n.add_argument("--work", default="", help="scratch folder for decoded PNGs")
+    n.add_argument("--out", default="", help="output folder (default: <work>/normals, mirrors the input tree)")
+    n.add_argument("--scratch", default="", help="scratch folder for decoded PNGs (default: <out>/_work)")
     n.add_argument("--strength", type=float, default=6.5, help="slope gain (default 6.5)")
     n.add_argument("--blur", type=float, default=1.2, help="height-field blur radius (default 1.2)")
     n.add_argument("--fmt", default="DXT5", help="texconv format, e.g. DXT5 / BC5_UNORM")
@@ -295,23 +324,23 @@ def build_parser() -> argparse.ArgumentParser:
     n.add_argument("--texconv", default=DEFAULT_TEXCONV, help="path to texconv.exe")
     n.set_defaults(func=cmd_normals)
 
-    a = sub.add_parser("audit", help="audit a CPedVariationInfo XML")
+    a = sub.add_parser("audit", parents=[common], help="audit a CPedVariationInfo XML")
     a.add_argument("file", help="a .ymt.xml exported by CodeWalker")
     a.add_argument("--json", nargs="?", const="-", default="", help=json_help)
     a.set_defaults(func=cmd_audit)
 
-    s = sub.add_parser("scale", help="rescale DDS files, keeping their format and mip depth")
+    s = sub.add_parser("scale", parents=[common], help="rescale DDS files, keeping their format and mip depth")
     s.add_argument("paths", nargs="+", help="DDS files or folders")
-    s.add_argument("--out", default="out", help="output folder (mirrors the input tree)")
+    s.add_argument("--out", default="", help="output folder (default: <work>/scaled, mirrors the input tree)")
     s.add_argument("--long-edge", type=int, default=1536, help="target long edge")
     s.add_argument("--min-edge", type=int, default=0, help="skip files whose long edge is <= this")
     s.add_argument("--texconv", default=DEFAULT_TEXCONV, help="path to texconv.exe")
     s.set_defaults(func=cmd_scale)
 
-    k = sub.add_parser("pack", help="pack a YTD from CodeWalker XML + DDS folder")
+    k = sub.add_parser("pack", parents=[common], help="pack a YTD from CodeWalker XML + DDS folder")
     k.add_argument("--xml", required=True, help="the .ytd.xml exported by CodeWalker")
     k.add_argument("--build", required=True, help="folder holding the DDS payloads")
-    k.add_argument("--out", required=True, help="path of the .ytd to write")
+    k.add_argument("--out", default="", help="path of the .ytd to write (default: <work>/packed/<name>.ytd)")
     k.add_argument("--core-dir", default="",
                    help="CodeWalker folder holding CodeWalker.Core.dll; auto-detected when omitted")
     k.add_argument("--legacy", action="store_true", help="write gen8 (version 165) instead of gen9")
@@ -319,7 +348,7 @@ def build_parser() -> argparse.ArgumentParser:
     k.add_argument("--ps1", default=DEFAULT_PS1, help="the pack_ytd.ps1 bridge script")
     k.set_defaults(func=cmd_pack)
 
-    y = sub.add_parser("ytd", help="inspect a texture dictionary (read-only)")
+    y = sub.add_parser("ytd", parents=[common], help="inspect a texture dictionary (read-only)")
     ysub = y.add_subparsers(dest="ytd_cmd", required=True)
     yl = ysub.add_parser("list", help="list the textures inside .ytd files")
     yl.add_argument("files", nargs="+", help=".ytd files")
@@ -330,7 +359,7 @@ def build_parser() -> argparse.ArgumentParser:
     yl.add_argument("--ps1", default=ytdmod.DEFAULT_PS1, help="the ytd_inspect.ps1 bridge script")
     yl.set_defaults(func=cmd_ytd_list)
 
-    m = sub.add_parser("mips", help="check or repair mip chains")
+    m = sub.add_parser("mips", parents=[common], help="check or repair mip chains")
     msub = m.add_subparsers(dest="mips_cmd", required=True)
     mc = msub.add_parser("check", help="report textures whose mip chain is incomplete")
     mc.add_argument("paths", nargs="+", help=".ytd and/or .dds files or folders")
@@ -345,6 +374,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    global WORK
+    raw = getattr(args, "work", "")
+    if raw:
+        WORK = os.path.abspath(raw)
+        os.makedirs(WORK, exist_ok=True)
+        print(f"work: {WORK}")
     return args.func(args)
 
 
