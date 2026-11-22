@@ -6,6 +6,16 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `gtatools ytd list` — read-only dump of a texture dictionary (name, size, format, mips) through
+  CodeWalker, with `--only` and `--json` filters.
+- `gtatools mips check` — reports every `.ytd` / `.dds` whose mip chain is shorter than
+  `floor(log2(long edge)) + 1`. `.dds` headers are parsed in pure Python; `.ytd` goes through
+  CodeWalker. Exit code `2` when something is incomplete, so it can gate a build.
+- `resources/ytd_inspect.ps1` — the CodeWalker bridge behind both commands.
+- docs: `docs/why-mips.md` explains the shimmer, with a cropped before/after figure and a GIF.
+
 ## [0.1.1] - 2026-11-20
 
 ### Fixed

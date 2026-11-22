@@ -8,7 +8,7 @@ import os
 import subprocess
 import sys
 
-from . import cw, dds, normals, ymt
+from . import cw, dds, normals, ymt, ytd as ytdmod
 
 DEFAULT_TEXCONV = os.environ.get("TEXCONV", "texconv.exe")
 DEFAULT_PS1 = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -167,6 +167,84 @@ def cmd_pack(args) -> int:
     return subprocess.call(cmd)
 
 
+def cmd_ytd_list(args) -> int:
+    try:
+        infos = ytdmod.inspect(args.files, core_dir=args.core_dir, ps1=args.ps1, legacy=args.legacy)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if not infos:
+        print("nothing read", file=sys.stderr)
+        return 1
+    if args.only:
+        for info in infos:
+            info.textures = info.find(args.only)
+    print(ytdmod.format_table(infos))
+    if args.json:
+        payload = [{"file": os.path.basename(i.file), "error": i.error,
+                    "textures": [t.__dict__ for t in i.textures]} for i in infos]
+        with open(args.json, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        print("json:", args.json)
+    return 0
+
+
+def cmd_mips_check(args) -> int:
+    dds_paths, ytd_paths = [], []
+    for p in args.paths:
+        if os.path.isdir(p):
+            for hit in glob.glob(os.path.join(p, "**", "*.dds"), recursive=True):
+                dds_paths.append(hit)
+            for hit in glob.glob(os.path.join(p, "**", "*.ytd"), recursive=True):
+                ytd_paths.append(hit)
+        elif p.lower().endswith(".ytd"):
+            ytd_paths.append(p)
+        else:
+            dds_paths.append(p)
+
+    rows = []  # (source, name, width, height, mips, expected, format)
+    for p in dds_paths:
+        try:
+            h = dds.read_header(p)
+        except ValueError as exc:
+            print("skip:", exc)
+            continue
+        rows.append((os.path.basename(p), os.path.basename(p), h.width, h.height, h.mips,
+                     max(h.width, h.height).bit_length(), h.label))
+
+    if ytd_paths:
+        try:
+            infos = ytdmod.inspect(ytd_paths, core_dir=args.core_dir, ps1=args.ps1, legacy=args.legacy)
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        for info in infos:
+            for t in info.textures:
+                rows.append((os.path.basename(info.file), t.name, t.width, t.height, t.mips,
+                             t.expected_mips, t.format))
+
+    if not rows:
+        print("nothing to check")
+        return 1
+
+    bad = [r for r in rows if r[4] < r[5]]
+    width = max(len(r[1]) for r in rows) + 2
+    for src, name, w, h, m, exp, fmt in rows:
+        if m < exp:
+            print(f"BAD  {src:28s} {name:{width}s} {w:5d}x{h:<4d} {m:2d}/{exp:<2d} {fmt}")
+    for r in [x for x in rows if x[4] >= x[5]]:
+        if args.all:
+            print(f"ok   {r[0]:28s} {r[1]:{width}s} {r[2]:5d}x{r[3]:<4d} {r[4]:2d}/{r[5]:<2d} {r[6]}")
+    print(f"checked {len(rows)} texture(s): {len(bad)} incomplete, {len(rows) - len(bad)} ok")
+    if args.json:
+        payload = [{"source": s, "name": n, "width": w, "height": h, "mips": m,
+                    "expected": e, "format": f, "ok": m >= e} for s, n, w, h, m, e, f in rows]
+        with open(args.json, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, indent=2)
+        print("json:", args.json)
+    return 0 if not bad else 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="gtatools", description="GTA V asset helpers")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -207,6 +285,28 @@ def build_parser() -> argparse.ArgumentParser:
     k.add_argument("--original", default="", help="copy G9/usage descriptors from this archive")
     k.add_argument("--ps1", default=DEFAULT_PS1)
     k.set_defaults(func=cmd_pack)
+
+    y = sub.add_parser("ytd", help="inspect a texture dictionary (read-only)")
+    ysub = y.add_subparsers(dest="ytd_cmd", required=True)
+    yl = ysub.add_parser("list", help="list the textures inside .ytd files")
+    yl.add_argument("files", nargs="+")
+    yl.add_argument("--only", default="", help="only show names containing this substring")
+    yl.add_argument("--json", default="")
+    yl.add_argument("--legacy", action="store_true", help="parse as gen8 (165) instead of gen9 (159)")
+    yl.add_argument("--core-dir", default="")
+    yl.add_argument("--ps1", default=ytdmod.DEFAULT_PS1)
+    yl.set_defaults(func=cmd_ytd_list)
+
+    m = sub.add_parser("mips", help="check or repair mip chains")
+    msub = m.add_subparsers(dest="mips_cmd", required=True)
+    mc = msub.add_parser("check", help="report textures whose mip chain is incomplete")
+    mc.add_argument("paths", nargs="+")
+    mc.add_argument("--all", action="store_true", help="also print the textures that are fine")
+    mc.add_argument("--json", default="")
+    mc.add_argument("--legacy", action="store_true")
+    mc.add_argument("--core-dir", default="")
+    mc.add_argument("--ps1", default=ytdmod.DEFAULT_PS1)
+    mc.set_defaults(func=cmd_mips_check)
     return p
 
 

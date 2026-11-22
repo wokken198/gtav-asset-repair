@@ -10,15 +10,18 @@ Where to look, depending on what you are trying to do.
 | see how the bundle is wired together | [dsh-plugin/docs/DETAIL.md](../dsh-plugin/docs/DETAIL.md) |
 | add this repository as a DSH market index | `https://cdn.jsdelivr.net/gh/wokken198/gtav-toolkit@main/market/index.json` |
 | avoid the mistakes this repo exists to document | [README § Known pitfalls](../README.md#known-pitfalls-this-repo-encodes) |
+| see what is inside a `.ytd` without opening CodeWalker | [README § ytd list](../README.md#ytd-list) |
+| find textures whose mip chain is too short | [README § mips check](../README.md#mips-check), then [why-mips.md](why-mips.md) |
 | understand why textures shimmer in the distance (missing mip levels) | [why-mips.md](why-mips.md) |
 | see what changed in each version | [CHANGELOG.md](../CHANGELOG.md) |
 
 ## Repository layout
 
 ```
-src/gtatools/          the Python package (cli, dds, normals, ymt, cw)
+src/gtatools/          the Python package (cli, dds, normals, ymt, ytd, cw)
 tests/                 unittest suite, no game files required
 resources/pack_ytd.ps1 the CodeWalker bridge used by `gtatools pack`
+resources/ytd_inspect.ps1  the CodeWalker bridge used by `ytd list` and `mips check`
 dsh-plugin/            the installable DeepSeek Harness bundle
   vendor/gtatools/     a byte-identical copy of src/gtatools
   docs/DETAIL.md       what each tool does and how it is configured

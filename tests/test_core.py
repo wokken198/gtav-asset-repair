@@ -8,7 +8,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "src"))
 
-from gtatools import dds, normals, ymt  # noqa: E402
+from gtatools import dds, normals, ymt, ytd  # noqa: E402
 
 TMP = os.path.join(HERE, "_tmp")
 os.makedirs(TMP, exist_ok=True)
@@ -149,6 +149,32 @@ class TestYmtAudit(unittest.TestCase):
     def test_hex_avail(self):
         self.assertEqual(ymt.parse_avail("00FF0102"), [0, 255, 1, 2])
         self.assertEqual(ymt.parse_avail("0 255 1"), [0, 255, 1])
+
+
+class TestYtd(unittest.TestCase):
+    def test_expected_mips(self):
+        cases = [((256, 128), 9), ((256, 256), 9), ((512, 256), 10), ((4, 4), 3), ((648, 324), 10)]
+        for (w, h), want in cases:
+            self.assertEqual(ytd.Texture("t", w, h, "DXT5", 1).expected_mips, want)
+
+    def test_mips_ok(self):
+        self.assertTrue(ytd.Texture("t", 256, 128, "DXT5", 9).mips_ok)
+        self.assertFalse(ytd.Texture("t", 256, 128, "DXT5", 8).mips_ok)
+        self.assertFalse(ytd.Texture("t", 256, 128, "DXT5", 1).mips_ok)
+
+    def test_find_and_table(self):
+        info = ytd.YtdInfo("x/banshee.ytd", [
+            ytd.Texture("banshee_badges", 256, 128, "DXT5", 9),
+            ytd.Texture("generic_leather2_n", 256, 256, "ATI2", 7),
+        ])
+        self.assertEqual([t.name for t in info.find("badge")], ["banshee_badges"])
+        table = ytd.format_table([info])
+        self.assertIn("2 texture(s), 1 with incomplete mips", table)
+        self.assertIn("generic_leather2_n", table)
+
+    def test_error_is_reported(self):
+        info = ytd.YtdInfo("broken.ytd", [], error="not an RSC7 file")
+        self.assertIn("not an RSC7 file", ytd.format_table([info]))
 
 
 if __name__ == "__main__":

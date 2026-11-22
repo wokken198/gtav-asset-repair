@@ -3,7 +3,7 @@
 [![tests](https://github.com/wokken198/gtav-toolkit/actions/workflows/tests.yml/badge.svg)](https://github.com/wokken198/gtav-toolkit/actions/workflows/tests.yml)
 [![release](https://img.shields.io/github/v/release/wokken198/gtav-toolkit?label=release&color=2ea44f)](https://github.com/wokken198/gtav-toolkit/releases/latest)
 
-Small, focused helpers for GTA V (Legacy and Enhanced / gen9) texture and ped-variation work. Four commands, one CLI:
+Small, focused helpers for GTA V (Legacy and Enhanced / gen9) texture and ped-variation work. Six commands, one CLI:
 
 | command | what it does |
 |---|---|
@@ -11,6 +11,8 @@ Small, focused helpers for GTA V (Legacy and Enhanced / gen9) texture and ped-va
 | `gtatools audit` | CPedVariationInfo (`.ymt`) consistency check against vanilla's rules |
 | `gtatools scale` | DDS rescaling that keeps pixel format and mip depth |
 | `gtatools pack` | build a `.ytd` from a CodeWalker XML + a folder of DDS |
+| `gtatools ytd list` | read-only dump of a texture dictionary (name, size, format, mips) |
+| `gtatools mips check` | flag incomplete mip chains in `.ytd` / `.dds` files |
 
 No game assets are included; everything reads from your own install.
 
@@ -125,6 +127,29 @@ similar) — the archive still loads, the game crashes when the target is drawn.
 `--legacy` writes gen9=off (version 165 assets). `--core-dir` overrides the CodeWalker location; when
 it is omitted the CLI probes `GTA_TOOLS_CW`, `CODEWALKER_DIR`, common install paths, and the working
 directory's parents.
+
+## ytd list
+
+```bash
+gtatools ytd list car.ytd --only badge
+gtatools ytd list cars/*.ytd --json
+```
+
+Reads a texture dictionary and prints one line per texture: name, size, format, mips. `--only` filters
+by substring, `--json` is for scripting. Needs CodeWalker (`CodeWalker.Core.dll`); nothing is written.
+
+## mips check
+
+```bash
+gtatools mips check extracted/                 # .ytd and .dds side by side
+gtatools mips check a.dds b.dds --all
+```
+
+Mip chains are the one defect you cannot see in a still screenshot: a 256×128 texture needs 9 levels
+(`floor(log2(256)) + 1`), and a file that ships 1 level aliases into a shimmering mess as soon as the
+camera moves. This subcommand reports `mips/expected` per texture; `.dds` files are parsed in pure
+Python, `.ytd` files go through CodeWalker. Exit code `2` when anything is incomplete, so it can gate
+a build. See [docs/why-mips.md](docs/why-mips.md) for the long version.
 
 ## Use it as a DeepSeek Harness plugin
 
