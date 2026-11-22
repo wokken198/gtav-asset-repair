@@ -49,7 +49,7 @@ BC7/BC5, full mip chains, dimensions rounded to 4) are the same in Legacy and En
 
 Start at [docs/README.md](docs/README.md) for a one-table map of the repository: which page to read for
 the CLI, for the DeepSeek Harness bundle, for the market index, and for the pitfalls below. The bundle's
-internals are described in [dsh-plugin/          DSH bundle (six agent tools, vendored gtatools)docs/DETAIL.md](dsh-plugin/          DSH bundle (six agent tools, vendored gtatools)docs/DETAIL.md).
+internals are described in [dsh-plugin/docs/DETAIL.md](dsh-plugin/docs/DETAIL.md).
 
 ## Install
 
@@ -203,7 +203,7 @@ from its own folder and never touches the temp directory.
 
 ## Use it as a DeepSeek Harness plugin
 
-`dsh-plugin/          DSH bundle (six agent tools, vendored gtatools)` is an installable DSH bundle that exposes the same six operations as agent tools
+`dsh-plugin/` is an installable DSH bundle that exposes the same six operations as agent tools
 (`gta_badge_normal`, `gta_ymt_audit`, `gta_ytd_scale`, `gta_ytd_pack`, `gta_ytd_list`, `gta_mips_check`).
 The Python package is vendored inside, so nothing needs to be pip-installed.
 
@@ -330,7 +330,7 @@ That attribution requirement is the one thing the MIT license already asks for
 original when they need the CLI or the fixes. Forking, renaming, adding a GUI,
 using only the normal-map maths, or wrapping the CLI in your own app are all fine.
 
-Not fine: shipping the bundled `dsh-plugin/          DSH bundle (six agent tools, vendored gtatools)`, or a copy of this code, without the
+Not fine: shipping the bundled `dsh-plugin/`, or a copy of this code, without the
 notice; or redistributing game assets (`.dds`, `.ytd`, `.ydd`, `.ymt`, brand art)
 as if they were yours — none of those are in this repository to begin with.
 
