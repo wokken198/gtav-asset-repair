@@ -1,4 +1,4 @@
-# GTA5 tools
+# gtav-asset-repair
 
 **Enhanced & Legacy** texture and ped work for GTA V — find and fill short mip chains, shrink `.ytd`
 archives without breaking them, audit `.ymt` ↔ `.ydd` pairs, and build badge normal maps.
@@ -40,8 +40,7 @@ Real packs, before → after, every write leaving a `.bak` behind:
 | 386 vehicles / 796 badge textures, rebuilt at 256 DXT5 with full mips | 65.4 MB | 44.1 MB | **−33%** |
 
 Mip work goes the other way: a 4-file dictionary with 25 short chains went from `25 incomplete` to
-`0 incomplete` in one pass, and two add-on peds whose `.ymt` declared 3 and 10 drawables for a 2-drawable
-`.ydd` were repaired, re-read and verified.
+`0 incomplete` in one pass, and two add-on peds were repaired, re-read and verified.
 
 | Analyze — estimate only, nothing written | Compress — 9 written, 1 skipped |
 |---|---|
@@ -111,23 +110,18 @@ gtav-asset-repair ped fix "D:\mods\peds" --apply
 
 ### Per-command notes
 
-- **normals** — height = `0.7 * percentile-normalised luma + 0.3 * alpha`, Gaussian blur, gradient scaled
-  by `--strength`; the atlas margin is forced flat to `(128,128,255)` so no rectangle shows around the art.
-  Tuning: flat decals 8–10, chrome / baked specular 4–5, text-only 6–7. Default 4.5 matches vanilla badges
-  (median slope 0.7–2.3°, bevels 25–35°).
+- **normals** — one diffuse map in, one `_n.dds` beside it. The defaults match vanilla badge intensity;
+  raise `--strength` only if the result reads flat.
+- **scale** — same format, same mip depth, just smaller. It never upscales.
+- **pack** — rebuild a `.ytd` from XML + DDS. Pass `--original` with a reference archive so the gen9
+  render-target bits survive; without them dashboard dials and similar scripted targets crash when drawn.
+- **lite** — `cap` cuts anything longer than the limit, `tier` snaps to 1024/1536/2048, `agg` also swaps
+  formats. `script_rt_*`, normal and spec maps keep their format, and nothing under 1024 px is touched.
+- **ped check|fix** — `fix` is a dry run unless `--apply`, and it re-reads what it wrote.
 
 ![diffuse to height field to normal map to lit result](docs/images/pipeline.png)
-- **scale** — RGB and alpha are resized **separately** (Pillow premultiplies alpha and darkens translucent
-  art); target size rounds to a multiple of 4; mip depth is preserved but capped to the new chain.
-- **pack** — `--original` copies `G9_UsageData / G9_Flags / UsageData / UsageFlags / ExtraFlags` from an
-  existing archive by texture name. CodeWalker's XML export drops those gen9 render-target bits; without
-  them the archive still loads but scripted render targets (dashboard dials) crash when drawn.
-- **lite** — `cap` scales anything longer than the limit; `tier` snaps to 1024/1536/2048; `agg` adds format
-  swaps (uncompressed → DXT5, opaque DXT5 → DXT1). `script_rt_*`, normal, `spec`/`gloss`/`dirt`/`mask`
-  keep their format, and nothing under 1024 px is touched.
-- **ped check|fix** — the key is the **slot index inside `availComp`**, not the component's position;
-  `numAvailTex` is the sum of `aTexData` over that component's drawables; `texId` is a race suffix, not a
-  texture slot. `fix` is a dry run unless `--apply`, and it re-reads what it wrote.
+
+Parameter maths, texture-format traps and the ped field rules: [docs/pitfalls.md](docs/pitfalls.md).
 
 ## Enhanced & Legacy
 
@@ -150,27 +144,13 @@ says so instead of producing a broken file).
 
 ## Safety rules
 
-- **Backups** — anything written in place leaves `<name>.bak`; an older `.bak` is replaced only after the
-  new file has been read back and verified.
-- **Dry run by default** — `ped fix` prints the plan, nothing is written without `--apply`.
-- **No silent format changes** — shrinking only touches dimensions; format swaps happen only in `agg` mode,
-  and never on `script_rt_*`, normal maps or `spec`/`gloss`/`dirt`/`decal`/`mask` textures where alpha
-  carries shader data.
-- **Verify before publishing** — every rebuilt archive is re-read and its texture count compared with the
-  source; a mismatch deletes the output instead of shipping it.
-- **Guard rails** — a gen9 archive parsed as legacy returns zeroed sizes, so the header is checked and a
-  mismatch fails loudly rather than printing plausible nonsense.
-
-## Known pitfalls this repo encodes
-
-- **XML → `.ytd` is lossy** for `script_rt_*`: always pack with `--original` when you have a reference.
-- **CodeWalker's DDS export flattens A8R8G8B8 to 8 bpp grayscale**, so exported statistics lie for
-  mask-style textures (plate fonts, glyph atlases). Read `TextureData.FullData` if it matters.
-- **Legacy vertex data** exports as `<Data2>` while the importer reads `<Data>` — XML round trips silently
-  drop legacy meshes; merge legacy peds from the binary.
-- **Patch-DLC override order follows `dlclist.xml`**, not `setup2.xml`'s `<order>`: a texture in a
-  later-loading pack wins even when an earlier pack declares the same name.
-- **Pillow ≥12 premultiplies alpha** when resizing RGBA, which darkens translucent art: scale channels apart.
+- **Backups** — anything written in place leaves `<name>.bak`, and an older `.bak` is replaced only after
+  the new file has been read back and checked.
+- **Dry run by default** — `ped fix` prints what it would change; nothing is written without `--apply`.
+- **No silent format changes** — shrinking only touches dimensions. Format swaps happen only in `agg`
+  mode, and never on `script_rt_*`, normal maps or spec-type textures where alpha carries shader data.
+- **Wrong input fails loudly** — a gen9 archive read as legacy returns zeroed sizes, so the header is
+  checked and a mismatch stops with an error instead of printing plausible nonsense.
 
 ## Performance
 
@@ -197,18 +177,16 @@ resources/               PowerShell helpers (ytd xml export/pack)
 packaging/               PyInstaller entry point, build script, portable README
 dsh-plugin/              DeepSeek Harness bundle (nine agent tools)
 market/                  DSH market index entry
-docs/                    docs/README.md, why-mips.md, ped-ymt-rules.md, images/
+docs/                    README.md, pitfalls.md, why-mips.md, ped-ymt-rules.md, images/
 ```
 
 ## Building on this
 
-Putting a UI, a wrapper or a fork on top is welcome. If you reuse the code, keep the copyright notice and
-say where it came from:
+Putting a UI, a wrapper or a fork on top is welcome — MIT, keep the notice:
 
 > Badge normal mapping and YTD tooling by wokken198, MIT licensed — https://github.com/wokken198/gtav-asset-repair
 
-That is what the MIT license already asks for; the link back is courtesy. Not fine: shipping the bundled
-`dsh-plugin/` or a copy of this code without the notice, or redistributing game assets (`.dds`, `.ytd`,
+What is not fine: shipping this code without the notice, or redistributing game assets (`.dds`, `.ytd`,
 `.ydd`, `.ymt`, brand art) as if they were yours — none of those are in this repository to begin with.
 
 ## Optional: DeepSeek Harness bundle
@@ -219,7 +197,7 @@ pip-installed. Details: [dsh-plugin/docs/DETAIL.md](dsh-plugin/docs/DETAIL.md).
 
 ## 中文简介
 
-**GTA5 tools** 是一个面向 **GTA V（增强版 gen9 / 旧版 gen8）** 的贴图与 PED 处理工具，桌面版和命令行都有。
+**gtav-asset-repair** 是一个面向 **GTA V（增强版 gen9 / 旧版 gen8）** 的贴图与 PED 处理工具，桌面版和命令行都有。
 
 四件事：**车标法线生成**、**YTD 贴图压缩**（降分辨率、降显存）、**Mip 链检查与补全**（消除远处闪烁）、
 **PED 的 `.ymt` / `.ydd` 校验与修复**（解决模型错位、LOD 异常、出生崩溃）。
