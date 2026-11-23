@@ -4,6 +4,30 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-11-23
+
+### Added
+- The MIP page explains what it is doing with `script_rt_*`: a permanent line under the report says
+  those render targets are skipped on purpose, and a circled help button spells out why (their mip
+  chain follows the render-target size, so forcing extra levels blurs or breaks the live picture).
+
+### Changed
+- The left navigation keeps a fixed 212 px width in both languages; English entries move the file
+  type onto a second line (`Normal map generate` / `(DDS)`), so switching language no longer slides
+  the column left and right.
+- The `?` affordance is now a circled question-mark button instead of a bare character, and it
+  follows the light/dark theme.
+- The page subtitle reserves two lines, so the header height is identical in Chinese and English.
+- `PED repair` is now `Ped YMT repair` (`PED YMT 修复` in Chinese) in the navigation and page title.
+
+### Fixed
+- English UI: the theme switch collapsed to 24 px and the navigation clipped once the labels grew;
+  the switches are packed before the title block and the nav column is measured from its longest
+  entry (232 -> 255 px before the fixed-width change).
+- The packaged build on 125% DPI scaling cut the fixed-width panels: the window, navigation,
+  parameter card and preview height now scale with `tk scaling`, and the process declares per-monitor
+  DPI awareness before the window is created.
+
 ## [0.6.0] - 2026-11-23
 
 ### Added

@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "GTA V 贴图工具",
-    "description": "九个工具，覆盖 GTA V 增强版与旧版资产：车标法线、YTD 压缩/补 mip/列表、打包，以及 PED YMT 校验与修复。",
+    "description": "九个工具，覆盖 GTA V 增强版与旧版资产，并附四页桌面窗口：车标法线、YTD 压缩/补 mip/列表、打包，以及 PED YMT 校验与修复。",
     "detail": "docs/DETAIL.md"
   }
 }

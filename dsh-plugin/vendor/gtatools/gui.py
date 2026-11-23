@@ -28,15 +28,17 @@ from . import dds as ddsmod
 from .normals import height_field, normal_from_height, shade_preview
 
 APP_TITLE = "gtatools - texture dictionary toolkit (Enhanced & Legacy)"
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 
 LANG = {
     "en": {
+        "mips.skip_note": "script_rt_* render targets are skipped on purpose - their mip chain is not rebuilt",
+        "help.script_rt": "script_rt_* textures are written by the game at runtime: dashboard dials, in-car screens, camera feeds.\nTheir mip chain follows the render-target size, so forcing extra mips blurs or breaks the live picture. The tool never touches them, so they stay listed as incomplete - that is expected.",
         "tagline": "Enhanced & Legacy textures",
-        "nav.ped": "PED repair (YDD/YMT)",
-    "nav.normal": "Normal map generate (DDS)",
-        "nav.mip": "Mip check (YTD/DDS)",
-        "nav.ytd": "Texture compression (YTD)",
+        "nav.ped": "Ped YMT repair\n(YDD/YMT)",
+    "nav.normal": "Normal map generate\n(DDS)",
+        "nav.mip": "Mip check\n(YTD/DDS)",
+        "nav.ytd": "Texture compression\n(YTD)",
         "title": "Badge normal map",
         "subtitle": "pick files or a folder, tune the slope, write next to the input",
         "page.normals.title": "Normal map generate",
@@ -46,7 +48,7 @@ LANG = {
         "page.mips.sub": "detect missing mip levels and fill the chain automatically - fixes shimmer and moire at distance and cuts render cost; the original .ytd / .dds is backed up as .bak",
         "page.ytd.title": "Texture compression",
         "page.ytd.sub": "batch-shrink the textures inside .ytd files and write them back to the same folder; the original file is backed up as .bak",
-        "page.ped.title": "PED YMT repair",
+        "page.ped.title": "Ped YMT repair",
     "page.ped.sub": "validate the .ymt against its .ydd and correct the parameter drift - fixes misplaced parts, broken LODs, wrong textures, random loading and spawn crashes",
     "ped.files": "PED files",
     "ped.add": "Add folder",
@@ -190,8 +192,10 @@ LANG = {
         ),
     },
     "zh": {
+        "mips.skip_note": "脚本渲染目标贴图（script_rt_*）默认跳过，不补 mip",
+        "help.script_rt": "script_rt_* 是游戏运行时写入的渲染目标（仪表盘、车载屏幕、镜头画面）。\n它们的 mip 链由渲染目标尺寸决定，人为补齐会让动态画面变糊甚至崩溃，所以工具一律不动它们，它们会一直显示为“缺”，属于正常。",
         "tagline": "增强版 & 旧版贴图",
-        "nav.ped": "PED 修复（YDD/YMT）",
+        "nav.ped": "PED YMT 修复\n（YDD/YMT）",
     "nav.normal": "法线生成（DDS）",
         "nav.mip": "MIP 检查（YTD/DDS）",
         "nav.ytd": "纹理压缩（YTD）",
@@ -325,7 +329,7 @@ LANG = {
 # --- Ped repair strings (kept in one place so both languages stay in sync) ---
 PED_TEXT = {
     "en": {
-        "page.ped.title": "PED YMT repair",
+        "page.ped.title": "Ped YMT repair",
         "page.ped.sub": "validate the .ymt against its .ydd and correct the parameter drift - fixes misplaced parts, broken LODs, wrong textures, random loading and spawn crashes",
         "ped.files": "PED files",
         "ped.add": "Add folder",
@@ -516,6 +520,41 @@ class Switch(tk.Canvas):
             self.on_pick(code)
 
 
+class HelpDot(tk.Canvas):
+    """A small circled question mark that looks like a button and shows a tooltip."""
+
+    SIZE = 18
+
+    def __init__(self, master, app: "App", key: str):
+        size = int(18 * getattr(app, "sx", 1.0))
+        super().__init__(master, width=size, height=size, bg=app.c("card"),
+                         highlightthickness=0, bd=0, cursor="hand2")
+        self.app = app
+        self.key = key
+        if not hasattr(app, "help_dots"):
+            app.help_dots = []
+        app.help_dots.append(self)
+        self.configure(bg=app.c("card"))
+        self._draw()
+        self.bind("<Enter>", lambda _e: app.tip_show(app.t(key), self))
+        self.bind("<Leave>", lambda _e: app.tip_hide())
+        self.bind("<Button-1>", lambda _e: app.tip_show(app.t(key), self))
+
+    def _draw(self):
+        self.delete("all")
+        size = int(18 * getattr(self.app, "sx", 1.0))
+        pad = 2
+        self.create_oval(pad, pad, size - pad, size - pad,
+                         outline=self.app.c("stroke_hi"), width=1,
+                         fill=self.app.c("card"))
+        self.create_text(size / 2, size / 2 + 1, text="?",
+                         fill=self.app.c("dim"), font=_font(8, True))
+
+    def redraw(self):
+        self.configure(bg=self.app.c("card"))
+        self._draw()
+
+
 class Card(tk.Frame):
     """A 1px-bordered panel with a small caps title and a padded body."""
 
@@ -531,13 +570,8 @@ class Card(tk.Frame):
         self.title = tk.Label(head, text="", bg=app.c("card"), fg=app.c("faint"), font=_font(9, True))
         self.title.pack(side="left")
         if help_key:
-            self.help = tk.Label(head, text="?", bg=app.c("card"), fg=app.c("faint"),
-                                 font=_font(9, True), cursor="hand2", padx=4)
-            self.help.pack(side="left", padx=(6, 0))
-            app.style_widget(self.help, "card", "faint")
-            self.help.bind("<Enter>", lambda _e: app.tip_show(app.t(help_key), self.help))
-            self.help.bind("<Leave>", lambda _e: app.tip_hide())
-            self.help.bind("<Button-1>", lambda _e: app.tip_show(app.t(help_key), self.help))
+            self.help = HelpDot(head, app, help_key)
+            self.help.pack(side="left", padx=(7, 0), pady=(1, 0))
         self.body = tk.Frame(self, bg=app.c("card"))
         self.body.pack(fill="both", expand=True, padx=14, pady=(10, 14))
         app.style_widget(self, "card")
@@ -674,12 +708,14 @@ class App(tk.Tk):
             self.texconv = ""
 
         self.title(APP_TITLE)
+        # Pin the whole layout to 96 dpi: widgets are laid out in pixels, so letting Tk recompute
+        # fonts from a 120/144 dpi monitor makes them grow inside a fixed-size window and clip.
         try:
-            self.sx = round(float(self.tk.call("tk", "scaling")) / (4.0 / 3.0), 2)
+            self.tk.call("tk", "scaling", 96.0 / 72.0)
         except Exception:
-            self.sx = 1.0
-        self.sx = max(1.0, min(self.sx, 2.0))
-        self.geometry("%dx%d" % (int(1220 * self.sx), int(800 * self.sx)))
+            pass
+        self.sx = 1.0
+        self.geometry("1220x800")
         self.minsize(int(1120 * self.sx), int(700 * self.sx))
         self.configure(bg=self.c("bg"))
         self._set_icon()
@@ -770,6 +806,11 @@ class App(tk.Tk):
             self.log.configure(bg=self.c("inset"), fg=self.c("dim"), insertbackground=self.c("fg"))
         except Exception:
             pass
+        for dot in getattr(self, "help_dots", []):
+            try:
+                dot.redraw()
+            except Exception:
+                pass
         for canvas in getattr(self, "preview_canvases", []):
             try:
                 canvas.configure(bg=self.c("inset"), highlightbackground=self.c("stroke"))
@@ -836,6 +877,8 @@ class App(tk.Tk):
             sw.redraw()
         if getattr(self, "status", None) is not None and not self.running:
             self.status.configure(text=self.t("idle"))
+        if hasattr(self, "_fit_nav"):
+            self._fit_nav()
 
     def _retranslate_pages(self):
         for page in getattr(self, "page_objects", {}).values():
@@ -901,6 +944,24 @@ class App(tk.Tk):
                   arrowcolor=[("active", self.c("fg"))])
         return "Pav.Vertical.TScrollbar"
 
+
+    def _fit_sub(self, event=None):
+        """Wrap the subtitle to whatever width the title column actually got."""
+        try:
+            width = event.width if event is not None else self._titles.winfo_width()
+        except Exception:
+            return
+        if width > 120:
+            self.sub.configure(wraplength=max(200, width - 6))
+
+    def _fit_nav(self):
+        """Make the nav column as wide as the longest label needs."""
+        self.update_idletasks()
+        widest = 0
+        for _row, lab, _accent in self.nav_rows.values():
+            widest = max(widest, lab.winfo_reqwidth())
+        self._nav.configure(width=int(212 * self.sx))
+
     def _paint_nav(self, name):
         for key, (row, lab, accent) in getattr(self, "nav_rows", {}).items():
             active = key == name
@@ -947,6 +1008,7 @@ class App(tk.Tk):
 
     def _build(self):
         self._nav = tk.Frame(self, bg=self.c("nav"), width=int(232 * self.sx))
+        self._nav.pack_propagate(False)
         self._nav.pack(side="left", fill="y")
         self._nav.pack_propagate(False)
         brand = tk.Label(self._nav, text="gtatools", bg=self.c("nav"), fg=self.c("fg"), font=_font(15, True))
@@ -966,6 +1028,8 @@ class App(tk.Tk):
             accent.pack(side="left", fill="y")
             lab = self.bind_text(tk.Label(row, text="", bg=self.c("hover") if active else self.c("nav"),
                                           fg=self.c("fg") if active else self.c("faint"),
+                                          justify="left", anchor="w",
+                                          wraplength=int(170 * self.sx),
                                           font=_font(10, active)), key)
             lab.pack(anchor="w", padx=12, pady=8)
             if active:
@@ -989,19 +1053,6 @@ class App(tk.Tk):
         head = tk.Frame(self._main, bg=self.c("bg"))
         head.pack(fill="x")
         self.style_widget(head, "bg")
-        titles = tk.Frame(head, bg=self.c("bg"))
-        titles.pack(side="left", fill="x", expand=True)
-        self.style_widget(titles, "bg")
-        h1 = tk.Label(titles, text="", bg=self.c("bg"), fg=self.c("fg"), font=_font(17, True))
-        self.h1 = h1
-        h1.pack(anchor="w")
-        self.style_widget(h1, "bg", "fg")
-        sub = tk.Label(titles, text="", bg=self.c("bg"), fg=self.c("faint"), font=_font(10),
-                       justify="left", anchor="w", wraplength=int(840 * self.sx))
-        self.sub = sub
-        sub.pack(anchor="w", pady=(2, 0))
-        self.style_widget(sub, "bg", "faint")
-
         toggles = tk.Frame(head, bg=self.c("bg"))
         toggles.pack(side="right", anchor="n")
         self.style_widget(toggles, "bg")
@@ -1017,6 +1068,22 @@ class App(tk.Tk):
         self.sw_theme.pack(side="left")
         self.sw_theme.set_value(self.theme)
 
+        titles = tk.Frame(head, bg=self.c("bg"))
+        self._titles = titles
+        titles.pack(side="left", fill="x", expand=True)
+        self.style_widget(titles, "bg")
+        h1 = tk.Label(titles, text="", bg=self.c("bg"), fg=self.c("fg"), font=_font(17, True))
+        self.h1 = h1
+        h1.pack(anchor="w")
+        self.style_widget(h1, "bg", "fg")
+        sub = tk.Label(titles, text="", bg=self.c("bg"), fg=self.c("faint"), font=_font(10),
+                       justify="left", anchor="w", wraplength=int(840 * self.sx))
+        self.sub = sub
+        sub.configure(height=2, anchor="nw", justify="left")
+        sub.pack(anchor="w", pady=(2, 0), fill="x")
+        self.style_widget(sub, "bg", "faint")
+        titles.bind("<Configure>", self._fit_sub)
+
         self.page_host = tk.Frame(self._main, bg=self.c("bg"))
         self.page_host.pack(fill="both", expand=True, pady=(14, 0))
         self.style_widget(self.page_host, "bg")
@@ -1025,6 +1092,7 @@ class App(tk.Tk):
         self.style_widget(self.page_normals, "bg")
         self.pages = {"normals": self.page_normals}
         self.page_normals.pack(fill="both", expand=True)
+        self.after(0, self._fit_nav)
         main = self.page_normals
         body = tk.Frame(main, bg=self.c("bg"))
         body.pack(fill="both", expand=True)
@@ -1165,6 +1233,19 @@ class App(tk.Tk):
             self.footer.pack_forget()
             self.bottom.pack_forget()
         self._update_titles()
+        self.after_idle(self._grow_to_fit)
+
+    def _grow_to_fit(self):
+        """Some page layouts ask for more width than the default window; grow once, never shrink."""
+        try:
+            self.update_idletasks()
+            need = self.winfo_reqwidth()
+            have = self.winfo_width()
+            limit = self.winfo_screenwidth() - 20
+            if need > have and need <= limit:
+                self.geometry("%dx%d" % (need, self.winfo_height()))
+        except Exception:
+            pass
 
     def _update_titles(self):
         page = getattr(self, "current_page", "normals")
@@ -1569,7 +1650,7 @@ def _fix_dpi():
     try:
         import ctypes
 
-        ctypes.windll.user32.SetProcessDpiAwarenessContext(-1)  # DPI_AWARENESS_CONTEXT_UNAWARE
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(1)  # system DPI aware: no bitmap stretching
     except Exception:
         pass
 

@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from tkinter import filedialog
 
 from . import cw, lite, ytd as ytdmod
-from .gui import Card, _font, _mono
+from .gui import Card, HelpDot, _font, _mono
 
 SUFFIX_TEX = (".dds", ".ytd")
 SUFFIX_YTD = (".ytd",)
@@ -518,6 +518,15 @@ class MipsPage(_Page):
         self.summary = tk.Label(action, text="", bg=app.c("card"), fg=app.c("dim"),
                                 font=_font(9), anchor="w")
         self.summary.pack(fill="x", pady=(6, 0))
+
+        note = tk.Frame(action, bg=app.c("card"))
+        note.pack(fill="x", pady=(2, 0))
+        app.style_widget(note, "card")
+        hint = tk.Label(note, text="", bg=app.c("card"), fg=app.c("faint"), font=_font(8))
+        hint.pack(side="left")
+        app.style_widget(hint, "card", "faint")
+        app.bind_text(hint, "mips.skip_note")
+        HelpDot(note, app, "help.script_rt").pack(side="left", padx=(6, 0))
         app.style_widget(self.summary, "card", "dim")
         self.progress = tk.Frame(action, bg=app.c("track"), height=6)
         self.progress.pack(fill="x", pady=(6, 0))

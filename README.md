@@ -263,9 +263,12 @@ A small desktop window ships next to the CLI, for people who would rather not ty
 
 ![the parameter help bubble](docs/images/gui-help.png)
 
+- four pages: normal maps (DDS), texture compression (YTD), mipmap check & fill, ped YMT repair
 - pick files, or a whole folder (it walks subdirectories for `*.dds`)
-- strength / blur / alpha weight sliders, format, resize and mip options; the `?`
+- strength / blur / alpha weight sliders, format, resize and mip options; the circled `?`
   next to *Parameters* explains each one, including what vanilla badges measure
+- the left column keeps a fixed width in both languages, so nothing jumps when you switch to English
+- the mipmap page says outright that `script_rt_*` textures are left alone, and why
 - three live previews: the source texture, the generated normal, and a shaded result
 - batch run with a progress bar, an English one-line-per-file log and cancel
 - output lands in `normals\` next to each input, so nothing is overwritten; if that
