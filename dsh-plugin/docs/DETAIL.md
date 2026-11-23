@@ -107,7 +107,7 @@ silently shuffle components, and the tool reports that instead of writing a brok
 ## Installing from the market index
 
 The repository publishes an index at
-`https://cdn.jsdelivr.net/gh/wokken198/gtav-toolkit@main/market/index.json`. Add it under
+`https://cdn.jsdelivr.net/gh/wokken198/gtav-asset-repair@main/market/index.json`. Add it under
 **Plugins → Discover → market settings**, then install `dsh-gta-tools` from the list. The index entry
 pins a commit, so updates arrive only when the index is regenerated — that is deliberate: it keeps the
 published bundle reproducible.

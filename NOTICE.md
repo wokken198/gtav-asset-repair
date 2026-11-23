@@ -1,7 +1,7 @@
 # Notice
 
-`gtatools` / `gtav-toolkit` — Copyright (c) 2026 wokken198
-<https://github.com/wokken198/gtav-toolkit>
+`gtatools` / `gtav-asset-repair` — Copyright (c) 2026 wokken198
+<https://github.com/wokken198/gtav-asset-repair>
 
 The code is MIT licensed (see `LICENSE`). In practice that means:
 
@@ -12,7 +12,7 @@ The code is MIT licensed (see `LICENSE`). In practice that means:
   copyright line and the MIT text. That is the only condition the license sets.
 - **Link back if you can.** A one-line credit such as
 
-  > Badge handling based on [gtav-toolkit](https://github.com/wokken198/gtav-toolkit)
+  > Badge handling based on [gtav-asset-repair](https://github.com/wokken198/gtav-asset-repair)
   > by wokken198, MIT licensed.
 
   is not required by MIT, but it is how people find the original when they need the

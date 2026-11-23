@@ -29,7 +29,7 @@ from .normals import height_field, normal_from_height, shade_preview
 
 APP_TITLE = "GTA5 tools - texture dictionary toolkit (Enhanced & Legacy)"
 VERSION = "0.6.3"
-ISSUE_URL = "https://github.com/wokken198/gtav-toolkit/issues"
+ISSUE_URL = "https://github.com/wokken198/gtav-asset-repair/issues"
 
 LANG = {
     "en": {
@@ -107,7 +107,7 @@ LANG = {
         "ytd.start": "Compress",
         "ytd.none": "add a .ytd file first",
         "ytd.no_cw": "set the CodeWalker folder first",
-        "ytd.legacy": "Legacy asset - convert it with CodeWalker before using it in the Enhanced edition.",
+        "ytd.legacy": "Legacy assets detected \u2014 remember to convert them with CodeWalker before using them in the Enhanced edition.",
         "ytd.version_gen9": "GEN9",
         "ytd.version_gen8": "GEN8",
         "ytd.done": "done: {out}",
@@ -131,12 +131,12 @@ LANG = {
         "ytd.add_dir": "Add folder",
         "ytd.mem": "memory  {before:.1f} MB -> {after:.1f} MB  ({pct}%)",
         "ytd.file": "files   {before:.1f} MB -> {after:.1f} MB  ({pct}%)",
-        "mode.cap": "Ceiling",
-        "mode.tier": "Snap to tier",
-        "mode.agg": "Reformat (changes formats)",
-        "mode.cap.desc": "Anything longer than {cap} is scaled down to {cap}; textures under 1024 px stay untouched.",
+        "mode.cap": "Option 2 \u00b7 Ceiling",
+        "mode.tier": "Option 1 \u00b7 Snap to tier",
+        "mode.agg": "Option 3 \u00b7 Reformat (Testing in-game highly recommended)",
+        "mode.cap.desc": "Longer than {cap} \u2192 scaled down to {cap}; smaller textures stay untouched.",
         "mode.tier.desc": "The long edge drops to the closest of 1024 / 1536 / 2048 below it.",
-        "mode.agg.desc": "Ceiling at {cap}, plus format swaps: uncompressed -> DXT5, opaque DXT5 -> DXT1. Test the result in game.",
+        "mode.agg.desc": "Cap textures at {cap} + format swaps: uncompressed → DXT5, opaque DXT5 → DXT1.",
         "help.ytd": (
             "Cap - anything longer than the limit is scaled down to it.\n"
             "Tier - the long edge snaps to 1024 / 1536 / 2048.\n"
@@ -250,7 +250,7 @@ LANG = {
         "ytd.start": "开始压缩",
         "ytd.none": "先添加 .ytd 文件",
         "ytd.no_cw": "先设置 CodeWalker 目录",
-        "ytd.legacy": "这是 Legacy 资产，若要增强版使用请先用 CodeWalker 进行转换。",
+        "ytd.legacy": "检测到旧版（GEN8）资源 \u2014 别忘了先用 CodeWalker 转换，再在增强版中使用。",
         "ytd.version_gen9": "GEN9",
         "ytd.version_gen8": "GEN8",
         "ytd.done": "完成：{out}",
@@ -274,12 +274,12 @@ LANG = {
         "ytd.add_dir": "添加文件夹",
         "ytd.mem": "显存  {before:.1f} MB -> {after:.1f} MB  ({pct}%)",
         "ytd.file": "文件  {before:.1f} MB -> {after:.1f} MB  ({pct}%)",
-        "mode.cap": "封顶",
-        "mode.tier": "降档",
-        "mode.agg": "换格式",
-        "mode.cap.desc": "超过 {cap} 的贴图缩到 {cap}；长边低于 1024 的不动。",
+        "mode.cap": "\u65b9\u5f0f 2 \u00b7 \u5c01\u9876",
+        "mode.tier": "\u65b9\u5f0f 1 \u00b7 \u964d\u6863",
+        "mode.agg": "\u65b9\u5f0f 3 \u00b7 \u5c3a\u5bf8\u4e0a\u9650 + \u91cd\u683c\u5f0f\u5316\uff08\u5f3a\u70c8\u5efa\u8bae\u6e38\u620f\u5185\u9a8c\u8bc1\uff09",
+        "mode.cap.desc": "超过 {cap} \u2192 缩到 {cap}；更小的贴图不动。",
         "mode.tier.desc": "长边就近下调到 1024 / 1536 / 2048。",
-        "mode.agg.desc": "在封顶 {cap} 的基础上改格式：未压缩→DXT5，不透明 DXT5→DXT1。建议压完进游戏验证。",
+        "mode.agg.desc": "将纹理尺寸上限设为 {cap}，并进行格式转换：未压缩 → DXT5，不透明 DXT5 → DXT1。",
         "help.ytd": (
             "上限：长边超过限制就压到限制。\n"
             "档位：长边就近落到 1024 / 1536 / 2048。\n"

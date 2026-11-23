@@ -36,8 +36,8 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/wokken198/gtav-toolkit.git",
+    "url": "https://github.com/wokken198/gtav-asset-repair.git",
     "directory": "dsh-plugin"
   },
-  "homepage": "https://github.com/wokken198/gtav-toolkit"
+  "homepage": "https://github.com/wokken198/gtav-asset-repair"
 }

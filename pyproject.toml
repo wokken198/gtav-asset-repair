@@ -23,9 +23,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/wokken198/gtav-toolkit"
-Repository = "https://github.com/wokken198/gtav-toolkit"
-Issues = "https://github.com/wokken198/gtav-toolkit/issues"
+Homepage = "https://github.com/wokken198/gtav-asset-repair"
+Repository = "https://github.com/wokken198/gtav-asset-repair"
+Issues = "https://github.com/wokken198/gtav-asset-repair/issues"
 
 [project.optional-dependencies]
 dev = ["pytest"]

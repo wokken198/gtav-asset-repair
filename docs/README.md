@@ -10,7 +10,7 @@ Where to look, depending on what you are trying to do.
 | build the Windows exe | [README → GUI](../README.md#gui) |
 | install the DeepSeek Harness bundle | [README § Use it as a DeepSeek Harness plugin](../README.md#use-it-as-a-deepseek-harness-plugin) |
 | see how the bundle is wired together | [dsh-plugin/docs/DETAIL.md](../dsh-plugin/docs/DETAIL.md) |
-| add this repository as a DSH market index | `https://cdn.jsdelivr.net/gh/wokken198/gtav-toolkit@main/market/index.json` |
+| add this repository as a DSH market index | `https://cdn.jsdelivr.net/gh/wokken198/gtav-asset-repair@main/market/index.json` |
 | avoid the mistakes this repo exists to document | [README § Known pitfalls](../README.md#known-pitfalls-this-repo-encodes) |
 | see what is inside a `.ytd` without opening CodeWalker | [README § ytd list](../README.md#ytd-list) |
 | find textures whose mip chain is too short | [README § mips check](../README.md#mips-check), then [why-mips.md](why-mips.md) |

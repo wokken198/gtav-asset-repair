@@ -325,6 +325,42 @@ class _Page:
         pass
 
 
+class RichDesc(tk.Text):
+    """Two-line description where {cap} renders bold, so the number reads as a variable."""
+
+    def __init__(self, master, app, owner, lines=2):
+        super().__init__(master, height=lines, width=10, wrap="word", bd=0, highlightthickness=0,
+                         bg=app.c("card"), fg=app.c("faint"), font=_font(8), cursor="arrow",
+                         takefocus=0, spacing1=1, spacing3=0)
+        self.app = app
+        self._owner = owner
+        self.tag_configure("b", font=_font(8, True), foreground=app.c("fg"))
+        self.configure(state="disabled")
+
+    def bind_text(self, key, cap=False):
+        self._key = key
+        self._cap = cap
+        self.retranslate()
+
+    def retranslate(self):
+        template = self.app.t(self._key)
+        value = str(self._owner.cap.get()) if self._cap else ""
+        self.configure(state="normal")
+        self.delete("1.0", "end")
+        if self._cap and "{cap}" in template:
+            for index, part in enumerate(template.split("{cap}")):
+                if index:
+                    self.insert("end", value, "b")
+                self.insert("end", part)
+        else:
+            self.insert("end", template)
+        self.configure(state="disabled")
+
+    def apply_theme(self):
+        self.configure(bg=self.app.c("card"), fg=self.app.c("faint"))
+        self.tag_configure("b", font=_font(8, True), foreground=self.app.c("fg"))
+
+
 class ModePanel(tk.Frame):
     """Tier on its own row; the cap limit sits left of the two cards that use it."""
 
@@ -353,7 +389,7 @@ class ModePanel(tk.Frame):
         # width three ways, so the cards stay the same size whatever the window does
         # mode 1 across the top; below it a narrow "long edge" column on the left and
         # modes 2 + 3 stacked on the right, all four blocks the same height
-        unit = int(104 * app.sx)
+        unit = int(80 * app.sx)
 
         tier.configure(height=unit)
         tier.pack_propagate(False)
@@ -397,27 +433,17 @@ class ModePanel(tk.Frame):
         self.card_cap = Card(stack, app, "mode.cap")
         self.card_cap.pack(fill="both", expand=True)
         self.card_cap.pack_propagate(False)
-        self.desc_cap = tk.Label(self.card_cap.body, text="", bg=app.c("card"), fg=app.c("faint"),
-                                 font=_font(8), anchor="w", justify="left")
-        self.desc_cap.pack(fill="x")
-        app.style_widget(self.desc_cap, "card", "faint")
-        self.desc_cap.bind("<Configure>", lambda e: self.desc_cap.configure(wraplength=max(120, e.width - 4)))
+        self.desc_cap = RichDesc(self.card_cap.body, app, self, lines=1)
+        self.desc_cap.pack(fill="x", pady=(2, 0))
+        self.desc_cap.bind_text("mode.cap.desc", cap=True)
         self._bind_card(self.card_cap, lite.MODE_CAP)
 
         self.card_agg = Card(stack, app, "mode.agg")
         self.card_agg.pack(fill="both", expand=True, pady=(6, 0))
         self.card_agg.pack_propagate(False)
-        self.desc_agg = tk.Label(self.card_agg.body, text="", bg=app.c("card"), fg=app.c("faint"),
-                                 font=_font(8), anchor="w", justify="left")
-        self.desc_agg.pack(fill="x")
-        app.style_widget(self.desc_agg, "card", "faint")
-        self.desc_agg.bind("<Configure>", lambda e: self.desc_agg.configure(wraplength=max(120, e.width - 4)))
-        self._bind_card(self.card_agg, lite.MODE_AGGRESSIVE)
-        self.desc_agg = tk.Label(self.card_agg.body, text="", bg=app.c("card"), fg=app.c("faint"),
-                                 font=_font(8), anchor="w", justify="left")
-        self.desc_agg.pack(fill="x")
-        app.style_widget(self.desc_agg, "card", "faint")
-        self.desc_agg.bind("<Configure>", lambda e: self.desc_agg.configure(wraplength=max(90, e.width - 4)))
+        self.desc_agg = RichDesc(self.card_agg.body, app, self, lines=1)
+        self.desc_agg.pack(fill="x", pady=(2, 0))
+        self.desc_agg.bind_text("mode.agg.desc", cap=True)
         self._bind_card(self.card_agg, lite.MODE_AGGRESSIVE)
 
         self._refresh()
@@ -456,6 +482,9 @@ class ModePanel(tk.Frame):
         for card, key in ((self.card_tier, "mode.tier"), (self.card_limit, "ytd.limit"),
                           (self.card_cap, "mode.cap"), (self.card_agg, "mode.agg")):
             card.title.configure(text=self.app.t(key))
+        for widget in (self.desc_cap, self.desc_agg):
+            widget.apply_theme()
+            widget.retranslate()
         self._refresh()
 
     def _refresh(self):
@@ -469,8 +498,8 @@ class ModePanel(tk.Frame):
                 card.active = active
                 card.paint()
         cap = int(self.cap.get())
-        self.desc_cap.configure(text=app.t("mode.cap.desc", cap=cap))
-        self.desc_agg.configure(text=app.t("mode.agg.desc", cap=cap))
+        self.desc_cap.retranslate()
+        self.desc_agg.retranslate()
         cap_now = int(self.cap.get())
         for value, (rowf, dot, lab) in zip((1024, 1536, 2048), self.radios):
             on = (value == cap_now) and not tier

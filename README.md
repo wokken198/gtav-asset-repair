@@ -3,12 +3,12 @@
 **Enhanced & Legacy** texture and ped work for GTA V — check mip chains, shrink `.ytd` files, audit
 `.ymt` ↔ `.ydd` pairs, and build badge normal maps. Desktop app, CLI, and a DeepSeek Harness bundle.
 
-[![tests](https://github.com/wokken198/gtav-toolkit/actions/workflows/tests.yml/badge.svg)](https://github.com/wokken198/gtav-toolkit/actions/workflows/tests.yml)
-[![release](https://img.shields.io/github/v/release/wokken198/gtav-toolkit?label=release&color=2ea44f)](https://github.com/wokken198/gtav-toolkit/releases/latest)
+[![tests](https://github.com/wokken198/gtav-asset-repair/actions/workflows/tests.yml/badge.svg)](https://github.com/wokken198/gtav-asset-repair/actions/workflows/tests.yml)
+[![release](https://img.shields.io/github/v/release/wokken198/gtav-asset-repair?label=release&color=2ea44f)](https://github.com/wokken198/gtav-asset-repair/releases/latest)
 
 ![GTA5 tools, normal map page](docs/images/app-normals.png)
 
-**[Download the portable build](https://github.com/wokken198/gtav-toolkit/releases/latest)** — unzip,
+**[Download the portable build](https://github.com/wokken198/gtav-asset-repair/releases/latest)** — unzip,
 double-click `gtatools.exe`, done. No Python needed; the only extra is CodeWalker for the pages that
 read or write archives (the app finds it, or you point at its folder).
 
@@ -55,6 +55,15 @@ numbers inside the `.ymt` — a damaged `.ydd` (broken mesh, wrong vertex layout
 | `normals`, `scale` (plain DDS) | yes | yes — DDS has no container version |
 | `ytd list`, `mips check`, `lite`, `pack` | yes | yes: auto-detected by header for `lite` / `mips`, `--legacy` for the rest |
 | `ped check`, `ped fix` | yes | yes — the gen8/`gen9` loader is picked from the `.ydd` header (RSC7 v165 = Legacy) |
+
+**Both generations, one batch.** Drop Legacy and Enhanced files into the same run and nothing gets
+confused: every archive is read and written at its own RSC7 version (5 = Enhanced, 13 = Legacy), so a
+mixed pack stays mixed — no silent upgrade, no downgrade, no re-save into the wrong generation. A
+7-file run of 3 Legacy + 4 Enhanced ped `.ytd` files was measured end to end: memory
+**527.5 MB → 256.3 MB (−51%)**, files **140.3 MB → 68.2 MB (−51%)**, 7 written, 0 failed, 0 skipped.
+
+Note what that does *not* mean: a Legacy file stays Legacy after processing. To use it in the Enhanced
+edition you still convert it with CodeWalker — the app tells you when it spots one.
 
 Everything that reads or writes an RSC7 archive goes through **CodeWalker.Core** (C#); the Python
 layer only orchestrates it. That is why CodeWalker is a requirement rather than an implementation
@@ -158,7 +167,7 @@ internals are described in [dsh-plugin/docs/DETAIL.md](dsh-plugin/docs/DETAIL.md
 ## Install
 
 **Windows, no Python:** grab `gtatools-portable.zip` from the
-[latest release](https://github.com/wokken198/gtav-toolkit/releases/latest), unzip it anywhere and run
+[latest release](https://github.com/wokken198/gtav-asset-repair/releases/latest), unzip it anywhere and run
 `gtatools.exe`. Unzip the folder as a whole — the exe needs the `_internal` folder next to it.
 
 **From source:**
@@ -396,7 +405,7 @@ is meant to be the engine for it.
 If you reuse the code, **keep the copyright notice and say where it came from**,
 e.g.:
 
-> Badge handling based on [gtav-toolkit](https://github.com/wokken198/gtav-toolkit)
+> Badge handling based on [gtav-asset-repair](https://github.com/wokken198/gtav-asset-repair)
 > by wokken198, MIT licensed.
 
 That attribution requirement is the one thing the MIT license already asks for
