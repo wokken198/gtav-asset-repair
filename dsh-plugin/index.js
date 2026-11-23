@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const name = "dsh-gta-tools";
+export const name = "dsh-gtav-asset-repair";
 export const inject = ["tools"];
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -74,9 +74,9 @@ async function resolvePython() {
 
 async function run(argv, timeoutMs = 600000) {
 	const python = await resolvePython();
-	const { error, stdout, stderr } = await spawnOnce(python, ["-m", "gtatools.cli", ...argv], timeoutMs);
+	const { error, stdout, stderr } = await spawnOnce(python, ["-m", "gtav_asset_repair.cli", ...argv], timeoutMs);
 	const text = [stdout, stderr].filter((p) => p && p.trim().length > 0).join("\n").trim();
-	if (error && text.length === 0) throw new Error(`gtatools failed: ${error.message}`);
+	if (error && text.length === 0) throw new Error(`gtav_asset_repair failed: ${error.message}`);
 	return text;
 }
 

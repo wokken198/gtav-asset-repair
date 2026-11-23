@@ -9,7 +9,7 @@
 ![GTA5 tools, normal map page](docs/images/app-normals.png)
 
 **[Download the portable build](https://github.com/wokken198/gtav-asset-repair/releases/latest)** — unzip,
-double-click `gtatools.exe`, done. No Python needed; the only extra is CodeWalker for the pages that
+double-click `gtav-asset-repair.exe`, done. No Python needed; the only extra is CodeWalker for the pages that
 read or write archives (the app finds it, or you point at its folder).
 
 What it saves you, measured on real packs (before → after, all with a `.bak` kept):
@@ -29,14 +29,14 @@ Four GUI pages, nine CLI commands, nine agent tools:
 
 | command | what it does |
 |---|---|
-| `gtatools normals` | badge diffuse map → tangent-space normal map (DDS) + contact sheet |
-| `gtatools audit` | CPedVariationInfo (`.ymt`) consistency check against vanilla's rules |
-| `gtatools scale` | DDS rescaling that keeps pixel format and mip depth |
-| `gtatools pack` | build a `.ytd` from a CodeWalker XML + a folder of DDS |
-| `gtatools ytd list` | read-only dump of a texture dictionary (name, size, format, mips) |
-| `gtatools mips check\|fix` | flag short mip chains, or rebuild the archive with full chains |
-| `gtatools lite` | shrink the textures inside `.ytd` files (cap / tier / aggressive) |
-| `gtatools ped check\|fix` | audit or repair `.ymt` ↔ `.ydd` pairs, keeping a `.bak` |
+| `gtav-asset-repair normals` | badge diffuse map → tangent-space normal map (DDS) + contact sheet |
+| `gtav-asset-repair audit` | CPedVariationInfo (`.ymt`) consistency check against vanilla's rules |
+| `gtav-asset-repair scale` | DDS rescaling that keeps pixel format and mip depth |
+| `gtav-asset-repair pack` | build a `.ytd` from a CodeWalker XML + a folder of DDS |
+| `gtav-asset-repair ytd list` | read-only dump of a texture dictionary (name, size, format, mips) |
+| `gtav-asset-repair mips check\|fix` | flag short mip chains, or rebuild the archive with full chains |
+| `gtav-asset-repair lite` | shrink the textures inside `.ytd` files (cap / tier / aggressive) |
+| `gtav-asset-repair ped check\|fix` | audit or repair `.ymt` ↔ `.ydd` pairs, keeping a `.bak` |
 
 No game assets are included; everything reads from your own install.
 
@@ -88,18 +88,18 @@ components (older dev builds do; the tool says so instead of producing a broken 
 
 ```bash
 # a badge texture -> normal map next to the source
-gtatools normals badge.dds --strength 4.5 --fmt DXT5
+gtav-asset-repair normals badge.dds --strength 4.5 --fmt DXT5
 
 # what is inside an archive, and which mip chains are short
-gtatools ytd list car.ytd
-gtatools mips check car.ytd
+gtav-asset-repair ytd list car.ytd
+gtav-asset-repair mips check car.ytd
 
 # shrink every .ytd in a folder, keeping the previous file as .bak
-gtatools lite "D:\mods\cars" --mode cap --cap 1024 --inplace
+gtav-asset-repair lite "D:\mods\cars" --mode cap --cap 1024 --inplace
 
 # ped audit, then repair (dry run first)
-gtatools ped check "D:\mods\peds"
-gtatools ped fix "D:\mods\peds" --apply
+gtav-asset-repair ped check "D:\mods\peds"
+gtav-asset-repair ped fix "D:\mods\peds" --apply
 ```
 
 ## Performance notes
@@ -166,9 +166,9 @@ internals are described in [dsh-plugin/docs/DETAIL.md](dsh-plugin/docs/DETAIL.md
 
 ## Install
 
-**Windows, no Python:** grab `gtatools-portable.zip` from the
+**Windows, no Python:** grab `gtav_asset_repair-portable.zip` from the
 [latest release](https://github.com/wokken198/gtav-asset-repair/releases/latest), unzip it anywhere and run
-`gtatools.exe`. Unzip the folder as a whole — the exe needs the `_internal` folder next to it.
+`gtav-asset-repair.exe`. Unzip the folder as a whole — the exe needs the `_internal` folder next to it.
 
 **From source:**
 
@@ -189,7 +189,7 @@ Pass `--work DIR` (before or after the command) and every default output lands b
 job leaves nothing scattered in the current directory:
 
 ```bash
-gtatools --work "D:\mods\NEW" normals "D:\mods\NEW\badges" --sheet "D:\mods\NEW\sheet.png"
+gtav_asset_repair --work "D:\mods\NEW" normals "D:\mods\NEW\badges" --sheet "D:\mods\NEW\sheet.png"
 # outputs: D:\mods\NEW\normals\
 #          D:\mods\NEW\scaled\      (scale)
 #          D:\mods\NEW\packed\      (pack, when --out is omitted)
@@ -201,7 +201,7 @@ arguments still win, so nothing changes for scripts that already pass paths.
 ## normals
 
 ```bash
-gtatools normals <src> --out out --sheet sheet.png
+gtav-asset-repair normals <src> --out out --sheet sheet.png
 # defaults: --strength 6.5 --blur 1.2 --fmt DXT5 --max-mips 12
 ```
 
@@ -221,7 +221,7 @@ Tuning: flat decals 8–10, chrome / baked-specular art 4–5, text-only art 6�
 ## audit
 
 ```bash
-gtatools audit ped.ymt.xml --json report.json
+gtav-asset-repair audit ped.ymt.xml --json report.json
 ```
 
 Checks against what vanilla peds actually do:
@@ -237,7 +237,7 @@ Exit code `2` when problems are found, so it can gate a build.
 ## scale
 
 ```bash
-gtatools scale <paths...> --out resized --long-edge 1536 --min-edge 1025
+gtav-asset-repair scale <paths...> --out resized --long-edge 1536 --min-edge 1025
 # --min-edge skips anything whose long edge is already <= that value
 ```
 
@@ -250,7 +250,7 @@ gtatools scale <paths...> --out resized --long-edge 1536 --min-edge 1025
 ## pack
 
 ```bash
-gtatools pack --xml vehshare.ytd.xml --build build_dir --out vehshare.ytd \
+gtav-asset-repair pack --xml vehshare.ytd.xml --build build_dir --out vehshare.ytd \
               --original vanilla_vehshare.ytd
 ```
 
@@ -266,8 +266,8 @@ directory's parents.
 ## ytd list
 
 ```bash
-gtatools ytd list car.ytd --only badge
-gtatools ytd list cars/*.ytd --json
+gtav-asset-repair ytd list car.ytd --only badge
+gtav-asset-repair ytd list cars/*.ytd --json
 ```
 
 Reads a texture dictionary and prints one line per texture: name, size, format, mips. `--only` filters
@@ -278,8 +278,8 @@ if an archive cannot be read.
 ## mips check
 
 ```bash
-gtatools mips check extracted/                 # .ytd and .dds side by side
-gtatools mips check a.dds b.dds --all
+gtav-asset-repair mips check extracted/                 # .ytd and .dds side by side
+gtav-asset-repair mips check a.dds b.dds --all
 ```
 
 Mip chains are the one defect you cannot see in a still screenshot: a 256×128 texture needs 9 levels
@@ -292,9 +292,9 @@ a build. See [docs/why-mips.md](docs/why-mips.md) for the long version.
 
 A small desktop window ships next to the CLI, for people who would rather not type:
 
-![gtatools GUI, light theme](docs/images/gui-light.png)
+![gtav_asset_repair GUI, light theme](docs/images/gui-light.png)
 
-![gtatools GUI, dark theme](docs/images/gui-dark.png)
+![gtav_asset_repair GUI, dark theme](docs/images/gui-dark.png)
 
 ![the parameter help bubble](docs/images/gui-help.png)
 
@@ -308,7 +308,7 @@ A small desktop window ships next to the CLI, for people who would rather not ty
 - batch run with a progress bar, an English one-line-per-file log and cancel
 - output lands in `normals\` next to each input, so nothing is overwritten; if that
   folder refuses the write it falls back to `_n_2.dds`, `_n_3.dds` …
-- scratch files go to `%TEMP%\gtatools\` and are deleted as the run proceeds
+- scratch files go to `%TEMP%\gtav_asset_repair\` and are deleted as the run proceeds
 - English / Chinese and light / dark, as fixed-width switches in the header; the last
   choice is remembered
 - texconv.exe is bundled in the packaged build, so it needs no Python and no setup
@@ -319,16 +319,16 @@ A small desktop window ships next to the CLI, for people who would rather not ty
 
 ![the texture compression page](docs/images/gui-ytd.png)
 
-Run it from a checkout with `python -m gtatools.gui` (or `gtatools-gui` after `pip install -e .`).
+Run it from a checkout with `python -m gtav_asset_repair.gui` (or `gtav_asset_repair-gui` after `pip install -e .`).
 To build the Windows exe:
 
 ```bash
 pip install pyinstaller
-pyinstaller --noconfirm --clean --onefile --windowed --name gtatools \
+pyinstaller --noconfirm --clean --onefile --windowed --name gtav_asset_repair \
   --runtime-tmpdir . \
-  --icon resources/gtatools.ico \
+  --icon resources/gtav_asset_repair.ico \
   --add-binary "texconv.exe;." \
-  --add-data "resources/gtatools.ico;resources" \
+  --add-data "resources/gtav_asset_repair.ico;resources" \
   --paths src --hidden-import PIL.ImageTk packaging/gui_entry.py
 ```
 
@@ -386,10 +386,10 @@ python -m unittest discover -s tests -v
 ## Layout
 
 ```
-src/gtatools/       cli.py, dds.py, normals.py, ymt.py, cw.py, ytd.py, gui.py
+src/gtav_asset_repair/       cli.py, dds.py, normals.py, ymt.py, cw.py, ytd.py, gui.py
 tests/              test_core.py
 resources/          pack_ytd.ps1
-dsh-plugin/         DSH bundle (nine agent tools, index.js, locale/, vendor/gtatools, icon.svg)
+dsh-plugin/         DSH bundle (nine agent tools, index.js, locale/, vendor/gtav_asset_repair, icon.svg)
 packaging/          PyInstaller entry point for the GUI
 market/             market index entry
 docs/               docs/README.md and docs/images/ artwork

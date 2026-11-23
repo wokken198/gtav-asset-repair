@@ -8,7 +8,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "src"))
 
-from gtatools import cli, dds, normals, ymt, ytd  # noqa: E402
+from gtav_asset_repair import cli, dds, normals, ymt, ytd  # noqa: E402
 
 TMP = os.path.join(HERE, "_tmp")
 os.makedirs(TMP, exist_ok=True)
@@ -232,19 +232,19 @@ class PedLegacyTest(unittest.TestCase):
         return fh.name
 
     def test_detects_gen8(self):
-        from gtatools.ped import legacy_for
+        from gtav_asset_repair.ped import legacy_for
 
         self.assertTrue(legacy_for(self._fake(165)))
 
     def test_detects_gen9(self):
-        from gtatools.ped import legacy_for
+        from gtav_asset_repair.ped import legacy_for
 
         self.assertFalse(legacy_for(self._fake(159)))
 
     def test_missing_header_is_not_legacy(self):
         from tempfile import NamedTemporaryFile
 
-        from gtatools.ped import legacy_for
+        from gtav_asset_repair.ped import legacy_for
 
         fh = NamedTemporaryFile(suffix=".ydd", delete=False)
         fh.write(b"nope")

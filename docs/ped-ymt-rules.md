@@ -1,7 +1,7 @@
 # ped ymt / ydd rules
 
 Derived from 41 vanilla peds (`a_f_y_*`, `a_m_y_*`) exported with CodeWalker.
-Use this file as the source of truth for `src/gtatools/ped.py`.
+Use this file as the source of truth for `src/gtav_asset_repair/ped.py`.
 
 ## Where the fields live
 

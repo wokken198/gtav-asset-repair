@@ -15,27 +15,27 @@ python -m json.tool dsh-plugin/locale/zh.json > /dev/null
 
 - `gui.VERSION`, `pyproject.toml` and `dsh-plugin/package.json` must carry the same version.
 - `CHANGELOG.md` has a section for that version.
-- `dsh-plugin/vendor/gtatools/*.py` is byte-identical to `src/gtatools/*.py`
-  (`diff -r src/gtatools dsh-plugin/vendor/gtatools`).
+- `dsh-plugin/vendor/gtav_asset_repair/*.py` is byte-identical to `src/gtav_asset_repair/*.py`
+  (`diff -r src/gtav_asset_repair dsh-plugin/vendor/gtav_asset_repair`).
 - `tests/_tmp` does not exist any more; the test run recreates it, so delete it last.
 
 ## 2. Build
 
 ```bash
-pyinstaller --noconfirm --clean --onedir --windowed --name gtatools \
-  --icon resources/gtatools.ico \
+pyinstaller --noconfirm --clean --onedir --windowed --name gtav_asset_repair \
+  --icon resources/gtav_asset_repair.ico \
   --add-binary "texconv.exe;." \
   --add-data "resources;resources" \
   --paths src --hidden-import PIL.ImageTk packaging/gui_entry.py
 ```
 
-Then zip `dist/gtatools` (the folder, not just the exe) as `gtatools-portable.zip`.
+Then zip `dist/gtav_asset_repair` (the folder, not just the exe) as `gtav_asset_repair-portable.zip`.
 
 The one-file variant is optional and only useful for people who keep it somewhere writable:
 
 ```bash
-pyinstaller --noconfirm --clean --onefile --windowed --name gtatools --runtime-tmpdir . \
-  --icon resources/gtatools.ico --add-binary "texconv.exe;." \
+pyinstaller --noconfirm --clean --onefile --windowed --name gtav_asset_repair --runtime-tmpdir . \
+  --icon resources/gtav_asset_repair.ico --add-binary "texconv.exe;." \
   --add-data "resources;resources" --paths src --hidden-import PIL.ImageTk packaging/gui_entry.py
 ```
 

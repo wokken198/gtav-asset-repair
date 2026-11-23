@@ -18,7 +18,7 @@ def project_version():
 
 class VersionTest(unittest.TestCase):
     def test_gui_version_matches_pyproject(self):
-        from gtatools import gui
+        from gtav_asset_repair import gui
 
         self.assertEqual(gui.VERSION, project_version())
 
@@ -29,7 +29,7 @@ class VersionTest(unittest.TestCase):
 
 class GuiImportTest(unittest.TestCase):
     def test_gui_module_imports_without_display(self):
-        from gtatools import gui
+        from gtav_asset_repair import gui
 
         self.assertTrue(callable(gui.main))
         self.assertIn("en", gui.LANG)
@@ -38,17 +38,17 @@ class GuiImportTest(unittest.TestCase):
             self.assertIn(theme, gui.THEMES)
 
     def test_language_tables_have_same_keys(self):
-        from gtatools import gui
+        from gtav_asset_repair import gui
 
         self.assertEqual(set(gui.LANG["en"]), set(gui.LANG["zh"]))
 
     def test_theme_tables_have_same_keys(self):
-        from gtatools import gui
+        from gtav_asset_repair import gui
 
         self.assertEqual(set(gui.THEMES["light"]), set(gui.THEMES["dark"]))
 
     def test_help_text_covers_every_parameter(self):
-        from gtatools import gui
+        from gtav_asset_repair import gui
 
         wanted = {"en": ("Strength", "Blur", "Alpha"), "zh": ("强度", "模糊", "Alpha")}
         for lang, words in wanted.items():
@@ -57,7 +57,7 @@ class GuiImportTest(unittest.TestCase):
                 self.assertIn(word, text, "%s help is missing %s" % (lang, word))
 
     def test_log_lines_are_english(self):
-        from gtatools import gui
+        from gtav_asset_repair import gui
 
         for lang in ("en", "zh"):
             for key, value in gui.LANG[lang].items():

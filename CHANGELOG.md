@@ -4,6 +4,34 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-11-24
+
+**The project, the command and the window are now all called `gtav-asset-repair`.**
+
+This is a breaking change for anyone who scripted the old command.
+
+### Changed
+
+- Command renamed: `gtatools ...` → `gtav-asset-repair ...` (and `gtav-asset-repair-gui`).
+  The old `gtatools` entry point is gone on purpose — one name only.
+- Python package: `gtatools` → `gtav_asset_repair` (underscores because a Python import name cannot
+  contain a hyphen; the distribution, the CLI, the exe and the window all use `gtav-asset-repair`).
+- Window title and the nav brand now read `gtav-asset-repair`; the executable is
+  `gtav-asset-repair.exe`.
+- DeepSeek Harness bundle: `dsh-gta-tools` → `dsh-gtav-asset-repair`. Tool names keep their `gta_*`
+  prefix, so existing agent scripts still call the same functions.
+- Repository renamed to `github.com/wokken198/gtav-asset-repair` (old links redirect).
+
+### Migration
+
+```bash
+pip install -e .
+gtav-asset-repair normals <src> --out <out>
+```
+
+If you drive the GUI, re-download the portable build: the old exe still works but its footer link and
+title point at the old name.
+
 ## [0.6.3] - 2026-11-24
 
 ### Added
@@ -139,7 +167,7 @@ All notable changes to this project are recorded here. The format follows
 - `lite` command in the CLI: `gtatools lite file.ytd --mode cap --cap 1024`.
 - `resources/ytd_export.ps1`: exports a dictionary through CodeWalker to an XML plus DDS
   files, used by both the page and the CLI.
-- `src/gtatools/lite.py`: sizing rules, format policy, XML rewrite, texconv resizing and a
+- `src/gtav_asset_repair/lite.py`: sizing rules, format policy, XML rewrite, texconv resizing and a
   read-back self check of the written archive.
 
 ### Changed
@@ -162,7 +190,7 @@ All notable changes to this project are recorded here. The format follows
   vanilla car badges measure, and which value this tool recommends.
 - Three-pane preview: the source texture, the generated normal map, and a shaded
   result, side by side.
-- Scratch files live in `%TEMP%\gtatools\run-<id>` (with `%LOCALAPPDATA%`, the exe
+- Scratch files live in `%TEMP%\gtav_asset_repair\run-<id>` (with `%LOCALAPPDATA%`, the exe
   folder and the input folder as fallbacks) and are deleted as soon as they are used.
 
 ### Changed
@@ -189,12 +217,12 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
-- A desktop GUI (`python -m gtatools.gui`): pick files or a folder, tune strength,
+- A desktop GUI (`python -m gtav_asset_repair.gui`): pick files or a folder, tune strength,
   blur, alpha weight, format, resize and mip depth, preview the result, run a batch
   with progress and cancel, and write `normals\<name>_n.dds` next to each input.
-- English / Chinese and light / dark themes, remembered in `%APPDATA%\gtatools\gui.json`.
-- `gtatools-gui` console entry point, `packaging/gui_entry.py` for PyInstaller, and
-  `resources/gtatools.ico`.
+- English / Chinese and light / dark themes, remembered in `%APPDATA%\gtav_asset_repair\gui.json`.
+- `gtav_asset_repair-gui` console entry point, `packaging/gui_entry.py` for PyInstaller, and
+  `resources/gtav_asset_repair.ico`.
 - `--work` / `--scratch` driven output layout shared by the CLI and the GUI.
 - `ytd list` and `mips check` gained the same `--json PATH` / stdout behaviour.
 
@@ -261,7 +289,7 @@ All notable changes to this project are recorded here. The format follows
 ### Added
 
 - `docs/README.md` — a one-table entry point that maps "what you want to do" to the page that covers it,
-  plus the repository layout and the rule that `src/gtatools` and `dsh-plugin/vendor/gtatools` stay
+  plus the repository layout and the rule that `src/gtav_asset_repair` and `dsh-plugin/vendor/gtav_asset_repair` stay
   byte-identical.
 - README: a `Docs` section pointing at that entry point and at `dsh-plugin/docs/DETAIL.md`; `Layout`
   now lists `market/` and `docs/`.

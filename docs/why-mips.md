@@ -91,11 +91,11 @@ A 512x256 texture should have 10 levels. A 648x324 texture should have 11. If
 the count is 1, the texture was exported by a tool that does not write mips —
 Photoshop's DDS exporter is the usual suspect.
 
-## What `gtatools` does about it
+## What `gtav_asset_repair` does about it
 
-- `gtatools normals` always emits a complete chain (`--max-mips` caps it).
-- `gtatools scale` keeps the mip depth of the input and regenerates the levels
+- `gtav-asset-repair normals` always emits a complete chain (`--max-mips` caps it).
+- `gtav-asset-repair scale` keeps the mip depth of the input and regenerates the levels
   for the new size.
-- `gtatools pack` writes whatever the DDS file contains, so the fix has to
+- `gtav-asset-repair pack` writes whatever the DDS file contains, so the fix has to
   happen at the DDS stage — which is exactly why the normal/retexture step owns
   it.

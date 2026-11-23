@@ -1,6 +1,6 @@
 # Notice
 
-`gtatools` / `gtav-asset-repair` — Copyright (c) 2026 wokken198
+`gtav-asset-repair` — Copyright (c) 2026 wokken198
 <https://github.com/wokken198/gtav-asset-repair>
 
 The code is MIT licensed (see `LICENSE`). In practice that means:

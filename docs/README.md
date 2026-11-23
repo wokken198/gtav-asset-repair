@@ -20,30 +20,30 @@ Where to look, depending on what you are trying to do.
 ## Repository layout
 
 ```
-src/gtatools/          the Python package (cli, dds, normals, ymt, ytd, cw)
+src/gtav_asset_repair/          the Python package (cli, dds, normals, ymt, ytd, cw)
 tests/                 unittest suite, no game files required
 packaging/gui_entry.py PyInstaller entry point for the GUI
-resources/gtatools.ico window icon, generated, brand-free
-resources/pack_ytd.ps1 the CodeWalker bridge used by `gtatools pack`
+resources/gtav_asset_repair.ico window icon, generated, brand-free
+resources/pack_ytd.ps1 the CodeWalker bridge used by `gtav-asset-repair pack`
 resources/ytd_inspect.ps1  the CodeWalker bridge used by `ytd list` and `mips check`
 dsh-plugin/            the installable DeepSeek Harness bundle
-  vendor/gtatools/     a byte-identical copy of src/gtatools
+  vendor/gtav_asset_repair/     a byte-identical copy of src/gtav_asset_repair
   docs/DETAIL.md       what each tool does and how it is configured
 market/index.json      market index entry (git source, pinned commit)
 docs/images/           figures used by the README
 ```
 
-`src/gtatools` and `dsh-plugin/vendor/gtatools` are kept byte-identical on purpose: the bundle has to work
+`src/gtav_asset_repair` and `dsh-plugin/vendor/gtav_asset_repair` are kept byte-identical on purpose: the bundle has to work
 without `pip install`, so it carries its own copy. Change one, change the other.
 
 ## The four commands, in one line each
 
-- `gtatools normals` — badge diffuse → tangent-space normal (DDS), optional contact sheet
-- `gtatools audit` — check a `CPedVariationInfo` (`.ymt`) against vanilla's rules
-- `gtatools scale` — resize DDS files, keeping pixel format and mip depth
-- `gtatools pack` — build a `.ytd` from a CodeWalker XML export plus DDS files
+- `gtav-asset-repair normals` — badge diffuse → tangent-space normal (DDS), optional contact sheet
+- `gtav-asset-repair audit` — check a `CPedVariationInfo` (`.ymt`) against vanilla's rules
+- `gtav-asset-repair scale` — resize DDS files, keeping pixel format and mip depth
+- `gtav-asset-repair pack` — build a `.ytd` from a CodeWalker XML export plus DDS files
 
-Full flags: `gtatools <command> --help`.
+Full flags: `gtav_asset_repair <command> --help`.
 
 ## Not covered here
 

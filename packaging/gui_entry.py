@@ -1,6 +1,6 @@
 """PyInstaller entry point: the whole GUI in one file."""
 
-from gtatools.gui import _fix_dpi, main
+from gtav_asset_repair.gui import _fix_dpi, main
 
 _fix_dpi()
 

@@ -3,8 +3,8 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "gtatools"
-version = "0.6.3"
+name = "gtav-asset-repair"
+version = "0.7.0"
 description = "Small GTA V asset helpers: badge normal maps, CPedVariationInfo auditing, DDS rescaling, YTD packing"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -31,8 +31,8 @@ Issues = "https://github.com/wokken198/gtav-asset-repair/issues"
 dev = ["pytest"]
 
 [project.scripts]
-gtatools = "gtatools.cli:main"
-gtatools-gui = "gtatools.gui:main"
+gtav-asset-repair = "gtav_asset_repair.cli:main"
+gtav-asset-repair-gui = "gtav_asset_repair.gui:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

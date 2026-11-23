@@ -4,7 +4,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
-from gtatools import lite  # noqa: E402
+from gtav_asset_repair import lite  # noqa: E402
 
 
 def entry(name="tex", width=2048, height=2048, mips=12, fmt="D3DFMT_DXT5", usage=""):

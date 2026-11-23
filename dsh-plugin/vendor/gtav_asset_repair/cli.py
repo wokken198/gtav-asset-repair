@@ -490,7 +490,7 @@ def cmd_ped_fix(args) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="gtatools", description="GTA V asset helpers")
+    p = argparse.ArgumentParser(prog="gtav-asset-repair", description="GTA V asset helpers")
     p.add_argument("--work", default="",
                    help="working folder; every default output goes below it")
     sub = p.add_subparsers(dest="cmd", required=True)

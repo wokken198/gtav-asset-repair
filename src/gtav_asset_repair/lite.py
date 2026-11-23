@@ -666,11 +666,11 @@ def _temp_root() -> str:
     for env in ("TEMP", "TMP"):
         value = os.environ.get(env)
         if value:
-            candidates.append(os.path.join(value, "gtatools"))
+            candidates.append(os.path.join(value, "gtav_asset_repair"))
     local = os.environ.get("LOCALAPPDATA")
     if local:
-        candidates.append(os.path.join(local, "gtatools", "_tmp"))
-    candidates.append(os.path.join(os.path.expanduser("~"), "gtatools-output"))
+        candidates.append(os.path.join(local, "gtav_asset_repair", "_tmp"))
+    candidates.append(os.path.join(os.path.expanduser("~"), "gtav_asset_repair-output"))
     for path in candidates:
         try:
             os.makedirs(path, exist_ok=True)

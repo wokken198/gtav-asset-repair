@@ -22,7 +22,7 @@
   },
   "plugins": [
     {
-      "name": "dsh-gta-tools",
+      "name": "dsh-gtav-asset-repair",
       "title": {
         "en": "GTA V texture tools",
         "zh": "GTA V 贴图工具"
@@ -56,7 +56,7 @@
       },
       "versions": [
         {
-          "version": "0.6.3",
+          "version": "0.7.0",
           "publishTimestamp": 1795468518,
           "source": {
             "type": "git",

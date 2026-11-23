@@ -101,20 +101,20 @@ silently shuffle components, and the tool reports that instead of writing a brok
 ## Limitations
 
 - Windows-only in practice: the pack step needs CodeWalker's .NET assembly.
-- `gta_ytd_pack` writes gen9 archives; legacy (gen8) assets need `gtatools`' `--legacy` switch on the CLI.
+- `gta_ytd_pack` writes gen9 archives; legacy (gen8) assets need `gtav_asset_repair`' `--legacy` switch on the CLI.
 - Long jobs run until the child process exits; very large batches are better run from the CLI.
 
 ## Installing from the market index
 
 The repository publishes an index at
 `https://cdn.jsdelivr.net/gh/wokken198/gtav-asset-repair@main/market/index.json`. Add it under
-**Plugins → Discover → market settings**, then install `dsh-gta-tools` from the list. The index entry
+**Plugins → Discover → market settings**, then install `dsh-gtav-asset-repair` from the list. The index entry
 pins a commit, so updates arrive only when the index is regenerated — that is deliberate: it keeps the
 published bundle reproducible.
 
 ## What the desktop window does
 
-The GUI (`gtatools.exe`) covers the same ground without a terminal, on four pages:
+The GUI (`gtav-asset-repair.exe`) covers the same ground without a terminal, on four pages:
 
 | page | what it reads | what it writes |
 |---|---|---|

@@ -1,4 +1,4 @@
-"""Tkinter front-end for gtatools: badge diffuse -> tangent-space normal map.
+"""Tkinter front-end for gtav_asset_repair: badge diffuse -> tangent-space normal map.
 
 One window, no console. Two languages (EN / 中文) and two themes (light / dark)
 switchable from the header. Defaults: light theme, Chinese.
@@ -27,8 +27,8 @@ from PIL import Image, ImageDraw, ImageTk
 from . import dds as ddsmod
 from .normals import height_field, normal_from_height, shade_preview
 
-APP_TITLE = "GTA5 tools - texture dictionary toolkit (Enhanced & Legacy)"
-VERSION = "0.6.3"
+APP_TITLE = "gtav-asset-repair (Enhanced & Legacy)"
+VERSION = "0.7.0"
 ISSUE_URL = "https://github.com/wokken198/gtav-asset-repair/issues"
 
 LANG = {
@@ -415,7 +415,7 @@ MIP_CHOICES = ["FULL", "13", "12", "11", "10", "9", "8", "7", "6"]
 
 def _config_dir() -> str:
     root = os.environ.get("APPDATA") or os.path.expanduser("~")
-    return os.path.join(root, "gtatools")
+    return os.path.join(root, "gtav_asset_repair")
 
 
 def load_config() -> dict:
@@ -1239,7 +1239,7 @@ class App(tk.Tk):
     def _set_icon(self):
         base = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.dirname(os.path.dirname(
             os.path.abspath(__file__))))
-        ico = os.path.join(base, "resources", "gtatools.ico")
+        ico = os.path.join(base, "resources", "gtav_asset_repair.ico")
         if os.path.isfile(ico):
             try:
                 self.iconbitmap(ico)
@@ -1583,7 +1583,7 @@ class App(tk.Tk):
         self._nav.pack_propagate(False)
         self._nav.pack(side="left", fill="y")
         self._nav.pack_propagate(False)
-        brand = tk.Label(self._nav, text="GTA5 tools", bg=self.c("nav"), fg=self.c("fg"), font=_font(15, True))
+        brand = tk.Label(self._nav, text="gtav-asset-repair", bg=self.c("nav"), fg=self.c("fg"), font=_font(15, True))
         brand.pack(anchor="w", padx=18, pady=(20, 2))
         self.style_widget(brand, "nav", "fg")
         tag = self.bind_text(tk.Label(self._nav, text="", bg=self.c("nav"), fg=self.c("faint"),
@@ -1948,10 +1948,10 @@ class App(tk.Tk):
         return bg.convert("RGB")
 
     def _scratch_roots(self) -> list[str]:
-        roots = [os.path.join(tempfile.gettempdir(), "gtatools")]
+        roots = [os.path.join(tempfile.gettempdir(), "gtav_asset_repair")]
         local = os.environ.get("LOCALAPPDATA")
         if local:
-            roots.append(os.path.join(local, "gtatools", "_tmp"))
+            roots.append(os.path.join(local, "gtav_asset_repair", "_tmp"))
         roots.append(os.path.join(self._app_dir(), "_tmp"))
         return roots
 
@@ -1966,7 +1966,7 @@ class App(tk.Tk):
         candidates = self._scratch_roots()
         if near:
             base = os.path.dirname(os.path.abspath(near)) if os.path.isfile(near) else os.path.abspath(near)
-            candidates.append(os.path.join(base, ".gtatools_tmp"))
+            candidates.append(os.path.join(base, ".gtav_asset_repair_tmp"))
         last = None
         for root in candidates:
             try:
@@ -2169,8 +2169,8 @@ class App(tk.Tk):
     def _publish(produced: str, source: str, stem: str) -> str:
         """Move the fresh dds next to its source; fall back when that folder is locked."""
         candidates = [os.path.dirname(os.path.abspath(source)),
-                      os.path.join(os.path.expanduser("~"), "Documents", "gtatools", "normals"),
-                      os.path.join(os.path.expanduser("~"), "gtatools-output")]
+                      os.path.join(os.path.expanduser("~"), "Documents", "gtav_asset_repair", "normals"),
+                      os.path.join(os.path.expanduser("~"), "gtav_asset_repair-output")]
         last = None
         for folder in candidates:
             try:
