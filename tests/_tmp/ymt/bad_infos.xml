@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CPedVariationInfo>
+ <availComp>0 255</availComp>
+ <aComponentData3 itemType="CPVComponentData">
+  <Item>
+   <numAvailTex value="2" />
+   <aDrawblData3 itemType="CPVDrawblData">
+    <Item>
+     <aTexData itemType="CPVTextureData">
+      <Item><texId value="1" /><distribution value="255" /></Item>
+     </aTexData>
+    </Item>
+    <Item>
+     <aTexData itemType="CPVTextureData">
+      <Item><texId value="1" /><distribution value="255" /></Item>
+     </aTexData>
+    </Item>
+   </aDrawblData3>
+  </Item>
+ </aComponentData3>
+ <compInfos itemType="CComponentInfo">
+  <Item><pedXml_compIdx value="0" /><pedXml_drawblIdx value="0" /></Item>
+ </compInfos>
+</CPedVariationInfo>

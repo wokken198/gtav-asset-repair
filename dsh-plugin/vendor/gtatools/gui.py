@@ -28,7 +28,7 @@ from . import dds as ddsmod
 from .normals import height_field, normal_from_height, shade_preview
 
 APP_TITLE = "gtatools - texture dictionary toolkit (Enhanced & Legacy)"
-VERSION = "0.5.1"
+VERSION = "0.6.0"
 
 LANG = {
     "en": {
@@ -674,8 +674,13 @@ class App(tk.Tk):
             self.texconv = ""
 
         self.title(APP_TITLE)
-        self.geometry("1220x800")
-        self.minsize(1120, 700)
+        try:
+            self.sx = round(float(self.tk.call("tk", "scaling")) / (4.0 / 3.0), 2)
+        except Exception:
+            self.sx = 1.0
+        self.sx = max(1.0, min(self.sx, 2.0))
+        self.geometry("%dx%d" % (int(1220 * self.sx), int(800 * self.sx)))
+        self.minsize(int(1120 * self.sx), int(700 * self.sx))
         self.configure(bg=self.c("bg"))
         self._set_icon()
         self.report_callback_exception = self._on_callback_error
@@ -941,7 +946,7 @@ class App(tk.Tk):
                      width=12).pack(side="right")
 
     def _build(self):
-        self._nav = tk.Frame(self, bg=self.c("nav"), width=232)
+        self._nav = tk.Frame(self, bg=self.c("nav"), width=int(232 * self.sx))
         self._nav.pack(side="left", fill="y")
         self._nav.pack_propagate(False)
         brand = tk.Label(self._nav, text="gtatools", bg=self.c("nav"), fg=self.c("fg"), font=_font(15, True))
@@ -992,7 +997,7 @@ class App(tk.Tk):
         h1.pack(anchor="w")
         self.style_widget(h1, "bg", "fg")
         sub = tk.Label(titles, text="", bg=self.c("bg"), fg=self.c("faint"), font=_font(10),
-                       justify="left", anchor="w", wraplength=840)
+                       justify="left", anchor="w", wraplength=int(840 * self.sx))
         self.sub = sub
         sub.pack(anchor="w", pady=(2, 0))
         self.style_widget(sub, "bg", "faint")
@@ -1027,7 +1032,7 @@ class App(tk.Tk):
 
         params = Card(body, self, "params", help_key="help.params")
         self.params_card = params
-        params.configure(width=352)
+        params.configure(width=int(352 * self.sx))
         params.pack(side="right", fill="y", padx=(12, 0))
         params.pack_propagate(False)
         pbody = params.body
@@ -1100,14 +1105,14 @@ class App(tk.Tk):
         self.status.pack(side="right")
         self.style_widget(self.status, "bg", "faint")
 
-        bottom = tk.Frame(self._main, bg=self.c("bg"), height=250)
+        bottom = tk.Frame(self._main, bg=self.c("bg"), height=int(250 * self.sx))
         self.bottom = bottom
         bottom.pack(fill="x", pady=(12, 0))
         bottom.pack_propagate(False)
         self.style_widget(bottom, "bg")
 
         logs = Card(bottom, self, "log")
-        logs.configure(width=352)
+        logs.configure(width=int(352 * self.sx))
         logs.pack(side="right", fill="both", padx=(12, 0))
         logs.pack_propagate(False)
         self.log = tk.Text(logs.body, bg=self.c("inset"), fg=self.c("dim"), insertbackground=self.c("fg"),
@@ -1127,7 +1132,7 @@ class App(tk.Tk):
             cap.pack(fill="x")
             self.style_widget(cap, "card", "faint")
             canvas = tk.Canvas(col, bg=self.c("inset"), highlightthickness=1,
-                               highlightbackground=self.c("stroke"), width=10, height=150)
+                               highlightbackground=self.c("stroke"), width=10, height=int(150 * self.sx))
             canvas.pack(fill="both", expand=True, pady=(3, 0))
             canvas.bind("<Configure>", lambda _e: self._schedule_preview())
             self.preview_canvases.append(canvas)
@@ -1551,7 +1556,26 @@ class App(tk.Tk):
         self.after(80, self._pump)
 
 
+def _fix_dpi():
+    """Keep the layout identical to the source runs.
+
+    PyInstaller ships a DPI-aware manifest, so on a 125% display Tk lays the UI out in
+    physical pixels and the fixed-width panels get clipped. Declaring the process
+    DPI-unaware makes Windows scale the whole window instead, which matches what the
+    source build looks like. Proper per-monitor scaling is a later task.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(-1)  # DPI_AWARENESS_CONTEXT_UNAWARE
+    except Exception:
+        pass
+
+
 def main():
+    _fix_dpi()
     App().mainloop()
 
 

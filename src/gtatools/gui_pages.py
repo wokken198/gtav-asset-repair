@@ -105,7 +105,7 @@ class _Page:
         app.style_widget(self.body, "bg")
 
         # left: files
-        self.left = tk.Frame(self.body, bg=app.c("bg"), width=290)
+        self.left = tk.Frame(self.body, bg=app.c("bg"), width=int(290 * app.sx))
         self.left.pack(side="left", fill="y", padx=(0, 12))
         self.left.pack_propagate(False)
         app.style_widget(self.left, "bg")

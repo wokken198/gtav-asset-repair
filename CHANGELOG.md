@@ -29,6 +29,9 @@ All notable changes to this project are recorded here. The format follows
 - `legacy_for()` treated a missing or truncated header as Enhanced by accident; it now has an
   explicit test for that case.
 - README still claimed the ped tools were Enhanced-only after the loader switch landed.
+- The packaged build declares DPI awareness through its manifest, so on a 125% display the
+  fixed-width panels were laid out at 96 dpi widths inside a scaled window and got clipped;
+  the window now scales its base sizes by Tk's scaling factor.
 
 ## [0.5.1] - 2026-11-23
 
