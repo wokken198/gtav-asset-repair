@@ -8,7 +8,7 @@ import os
 import subprocess
 import sys
 
-from . import cw, dds, normals, ymt, ytd as ytdmod
+from . import cw, dds, lite, normals, ymt, ytd as ytdmod
 
 DEFAULT_TEXCONV = os.environ.get("TEXCONV", "texconv.exe")
 DEFAULT_PS1 = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -299,6 +299,154 @@ def cmd_mips_check(args) -> int:
     return 0 if not bad else 2
 
 
+def cmd_lite(args) -> int:
+    files = []
+    for p in args.files:
+        if os.path.isdir(p):
+            files.extend(glob.glob(os.path.join(p, "**", "*.ytd"), recursive=True))
+        else:
+            files.append(p)
+    if not files:
+        print("no .ytd files given", file=sys.stderr)
+        return 1
+    out_dir = ""
+    if args.out and len(files) > 1:
+        out_dir = args.out
+        os.makedirs(out_dir, exist_ok=True)
+    failed = 0
+    payload = []
+    for src in files:
+        out = args.out if (args.out and not out_dir) else (
+            os.path.join(out_dir, os.path.splitext(os.path.basename(src))[0] + "_lite.ytd") if out_dir else "")
+        try:
+            written, report = lite.make_lite(src, out_path=out, mode=args.mode, cap=args.cap,
+                                             core_dir=args.core_dir, texconv=args.texconv,
+                                             report_path=args.report, inplace=args.inplace)
+        except Exception as exc:  # noqa: BLE001 - report the file, keep the batch going
+            failed += 1
+            payload.append({"file": os.path.basename(src), "error": str(exc)})
+            print(f"err {os.path.basename(src)}: {exc}")
+            continue
+        if not written:
+            payload.append({"file": os.path.basename(src), "skipped": report})
+            print("skip %s: %s" % (os.path.basename(src), report))
+            continue
+        before, after = os.path.getsize(src), os.path.getsize(written)
+        payload.append({"file": os.path.basename(src), "out": written, "before": before, "after": after,
+                        "plan": report.splitlines()})
+        print(report)
+        print(f"ok  {os.path.basename(src)} -> {written} ({before} B -> {after} B)")
+    if args.json == "-":
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    elif args.json:
+        _emit_json(payload, args.json)
+    return 0 if failed == 0 else 1
+
+
+def _ped_targets(paths) -> list[tuple[str, str, str]]:
+    from . import ped as pedmod
+    found: list[tuple[str, str, str]] = []
+    for raw in paths:
+        path = os.path.abspath(raw)
+        if os.path.isdir(path):
+            found.extend(pedmod.pairs(path))
+            continue
+        stem = os.path.splitext(path)[0]
+        ydd, ymt = stem + ".ydd", stem + ".ymt"
+        if os.path.isfile(ydd) and os.path.isfile(ymt):
+            found.append((os.path.basename(stem), ydd, ymt))
+    seen, unique = set(), []
+    for item in found:
+        key = item[1].lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(item)
+    return unique
+
+
+def cmd_ped_check(args) -> int:
+    from . import ped as pedmod
+    core = args.core_dir or cw.find_corewalker()
+    if not core:
+        print("err  CodeWalker not found; pass --core-dir", file=sys.stderr)
+        return 2
+    targets = _ped_targets(args.paths)
+    if not targets:
+        print("err  no .ydd / .ymt pairs found", file=sys.stderr)
+        return 2
+    rows, bad = [], 0
+    for stem, ydd, ymt in targets:
+        try:
+            report = pedmod.check_pair(stem, ydd, ymt, core)
+        except Exception as exc:                          # noqa: BLE001
+            bad += 1
+            rows.append({"name": stem, "ok": False, "problems": [str(exc)]})
+            print("bad  %-30s %s" % (stem, str(exc)[:110]))
+            continue
+        if report.ok:
+            rows.append({"name": stem, "ok": True, "problems": [], "notes": report.notes,
+                         "legacy": report.legacy})
+            print("ok   %-30s %d drawable(s)%s" % (stem, len(report.ydd_drawables),
+                                                   "  gen8" if report.legacy else ""))
+        else:
+            bad += 1
+            rows.append({"name": stem, "ok": False, "problems": report.problems,
+                         "notes": report.notes, "legacy": report.legacy})
+            print("bad  %-30s %s" % (stem, report.problems[0][:110]))
+            for extra in report.problems[1:3]:
+                print("     %s" % extra[:110])
+    print("\n%d PED(s): %d ok, %d with problems" % (len(targets), len(targets) - bad, bad))
+    if args.json:
+        with open(args.json, "w", encoding="utf-8") as fh:
+            json.dump(rows, fh, ensure_ascii=False, indent=1)
+        print("json -> %s" % args.json)
+    return 0 if bad == 0 else 1
+
+
+def cmd_ped_fix(args) -> int:
+    from . import ped as pedmod
+    core = args.core_dir or cw.find_corewalker()
+    if not core:
+        print("err  CodeWalker not found; pass --core-dir", file=sys.stderr)
+        return 2
+    targets = _ped_targets(args.paths)
+    if not targets:
+        print("err  no .ydd / .ymt pairs found", file=sys.stderr)
+        return 2
+    done = failed = skipped = 0
+    for stem, ydd, ymt in targets:
+        try:
+            report = pedmod.check_pair(stem, ydd, ymt, core)
+        except Exception as exc:                          # noqa: BLE001
+            failed += 1
+            print("bad  %-30s %s" % (stem, str(exc)[:110]))
+            continue
+        if report.ok:
+            skipped += 1
+            print("skip %-30s already ok" % stem)
+            continue
+        structural = any(("drawable" in p or "compInfos" in p) for p in report.problems)
+        action = "align" if structural else "repair"
+        if not args.apply:
+            print("plan %-30s %s (%s)" % (stem, action, report.problems[0][:90]))
+            continue
+        try:
+            if structural:
+                changes, _ = pedmod.align_pair(stem, ydd, ymt, core, apply=True)
+            else:
+                changes, _ = pedmod.fix_pair(stem, ydd, ymt, core)
+            done += 1
+            print("ok   %-30s %s: %d change(s), backup %s.bak" % (stem, action, len(changes), os.path.basename(ymt)))
+        except Exception as exc:                          # noqa: BLE001
+            failed += 1
+            print("bad  %-30s %s" % (stem, str(exc)[:110]))
+    if not args.apply:
+        print("\ndry run: %d pair(s) would change; add --apply to write (a .bak is kept)" % (len(targets) - skipped))
+        return 0
+    print("\n%d fixed, %d skipped, %d failed" % (done, skipped, failed))
+    return 0 if failed == 0 else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="gtatools", description="GTA V asset helpers")
     p.add_argument("--work", default="",
@@ -359,6 +507,22 @@ def build_parser() -> argparse.ArgumentParser:
     yl.add_argument("--ps1", default=ytdmod.DEFAULT_PS1, help="the ytd_inspect.ps1 bridge script")
     yl.set_defaults(func=cmd_ytd_list)
 
+    li = sub.add_parser("lite", parents=[common],
+                        help="write lite.ytd: shrink the textures of an existing dictionary")
+    li.add_argument("files", nargs="+", help=".ytd files or folders")
+    li.add_argument("--mode", default=lite.MODE_CAP, choices=list(lite.MODES),
+                    help="cap: shrink anything above --cap; tier: snap to 1024/1536/2048; "
+                         "agg: cap plus format conversion")
+    li.add_argument("--cap", type=int, default=2048, help="long-edge limit for cap/agg modes")
+    li.add_argument("--out", default="", help="output .ytd, or a folder when several inputs are given")
+    li.add_argument("--inplace", action="store_true",
+                    help="overwrite each input and keep the previous file as <name>.ytd.bak")
+    li.add_argument("--report", default="", help="write the per-texture plan here")
+    li.add_argument("--core-dir", default="", help="CodeWalker folder; auto-detected when omitted")
+    li.add_argument("--texconv", default=DEFAULT_TEXCONV, help="path to texconv.exe")
+    li.add_argument("--json", nargs="?", const="-", default="", help=json_help)
+    li.set_defaults(func=cmd_lite)
+
     m = sub.add_parser("mips", parents=[common], help="check or repair mip chains")
     msub = m.add_subparsers(dest="mips_cmd", required=True)
     mc = msub.add_parser("check", help="report textures whose mip chain is incomplete")
@@ -369,10 +533,35 @@ def build_parser() -> argparse.ArgumentParser:
     mc.add_argument("--core-dir", default="", help="CodeWalker folder; auto-detected when omitted")
     mc.add_argument("--ps1", default=ytdmod.DEFAULT_PS1, help="the ytd_inspect.ps1 bridge script")
     mc.set_defaults(func=cmd_mips_check)
+
+    p_ = sub.add_parser("ped", parents=[common], help="audit or repair ped .ymt against its .ydd")
+    psub = p_.add_subparsers(dest="ped_cmd", required=True)
+
+    pc = psub.add_parser("check", help="report peds whose .ymt does not match the .ydd")
+    pc.add_argument("paths", nargs="+", help="ped folders, or a .ydd / .ymt file")
+    pc.add_argument("--core-dir", default="", help="folder holding CodeWalker.Core.dll")
+    pc.add_argument("--json", default="", metavar="PATH", help="also write the findings as JSON")
+    pc.set_defaults(func=cmd_ped_check)
+
+    pf = psub.add_parser("fix", help="repair the .ymt files (keeps a .bak); dry run without --apply")
+    pf.add_argument("paths", nargs="+", help="ped folders, or a .ydd / .ymt file")
+    pf.add_argument("--core-dir", default="", help="folder holding CodeWalker.Core.dll")
+    pf.add_argument("--apply", action="store_true", help="actually write; otherwise only report the action")
+    pf.set_defaults(func=cmd_ped_fix)
     return p
 
 
+def _safe_console() -> None:
+    """Never let a print() kill the run: replace characters the console cannot encode."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except Exception:                                   # noqa: BLE001
+            pass
+
+
 def main(argv=None) -> int:
+    _safe_console()
     args = build_parser().parse_args(argv)
     global WORK
     raw = getattr(args, "work", "")

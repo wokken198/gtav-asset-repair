@@ -1,9 +1,11 @@
 # gtatools
 
+**Enhanced & Legacy** texture work for GTA V — a desktop app, a CLI and a DeepSeek Harness plugin.
+
 [![tests](https://github.com/wokken198/gtav-toolkit/actions/workflows/tests.yml/badge.svg)](https://github.com/wokken198/gtav-toolkit/actions/workflows/tests.yml)
 [![release](https://img.shields.io/github/v/release/wokken198/gtav-toolkit?label=release&color=2ea44f)](https://github.com/wokken198/gtav-toolkit/releases/latest)
 
-Small, focused helpers for GTA V (Legacy and Enhanced / gen9) texture and ped-variation work. Six commands, one CLI:
+Small, focused helpers for GTA V texture dictionaries and ped variation files. Four GUI pages, eight CLI commands, nine agent tools:
 
 | command | what it does |
 |---|---|
@@ -13,8 +15,90 @@ Small, focused helpers for GTA V (Legacy and Enhanced / gen9) texture and ped-va
 | `gtatools pack` | build a `.ytd` from a CodeWalker XML + a folder of DDS |
 | `gtatools ytd list` | read-only dump of a texture dictionary (name, size, format, mips) |
 | `gtatools mips check` | flag incomplete mip chains in `.ytd` / `.dds` files |
+| `gtatools lite` | shrink the textures inside `.ytd` files (cap / tier / aggressive) |
+| `gtatools ped check\|fix` | audit or repair `.ymt` ↔ `.ydd` pairs, keeping a `.bak` |
 
 No game assets are included; everything reads from your own install.
+
+## Scope: what this is, and what it is not
+
+**It is** a pipeline for the boring, error-prone parts of texture and ped-variation work: making
+badge normal maps, finding and filling short mip chains, shrinking `.ytd` archives without breaking
+them, and catching `.ymt` / `.ydd` drift before a ped crashes in game.
+
+**It is not** a resource editor. It cannot open models, maps, vehicles metas, ymap or audio, and it
+does not replace OpenIV, CodeWalker or Sollumz. It never touches geometry: `ped fix` rewrites
+numbers inside the `.ymt` — a damaged `.ydd` (broken mesh, wrong vertex layout) stays broken.
+
+| area | Enhanced (gen9) | Legacy (gen8) |
+|---|---|---|
+| `normals`, `scale` (plain DDS) | yes | yes — DDS has no container version |
+| `ytd list`, `mips check`, `lite`, `pack` | yes | yes: auto-detected by header for `lite` / `mips`, `--legacy` for the rest |
+| `ped check`, `ped fix` | yes | yes — the gen8/`gen9` loader is picked from the `.ydd` header (RSC7 v165 = Legacy) |
+
+Everything that reads or writes an RSC7 archive goes through **CodeWalker.Core** (C#); the Python
+layer only orchestrates it. That is why CodeWalker is a requirement rather than an implementation
+detail — and why the ped repair refuses to write when the local CodeWalker build shuffles `.ymt`
+components (older dev builds do; the tool says so instead of producing a broken file).
+
+## Safety rules the tools follow
+
+- **Backups**: anything written in place leaves `<name>.bak` next to the original; an older `.bak`
+  is replaced only after the new file has been read back and verified.
+- **Dry run by default**: `ped fix` prints the plan; nothing is written without `--apply`
+  (the GUI asks per selection).
+- **No silent format changes**: shrinking only touches dimensions. Format swaps happen only in the
+  `agg` mode, and never on `script_rt_*`, normal maps or `spec` / `gloss` / `dirt` / `decal` / `mask`
+  textures, where the alpha channel carries shader data.
+- **Nothing under 1024 px** is resized, and a texture whose mip chain is already complete is left
+  alone. `mips fix` skips `script_rt_*` entirely — those are render targets, not sampled images.
+- **Verify before publishing**: every rebuilt archive is re-read and its texture count compared with
+  the source; a mismatch deletes the output instead of shipping it.
+
+## Try it in one minute
+
+```bash
+# a badge texture -> normal map next to the source
+gtatools normals badge.dds --strength 4.5 --fmt DXT5
+
+# what is inside an archive, and which mip chains are short
+gtatools ytd list car.ytd
+gtatools mips check car.ytd
+
+# shrink every .ytd in a folder, keeping the previous file as .bak
+gtatools lite "D:\mods\cars" --mode cap --cap 1024 --inplace
+
+# ped audit, then repair (dry run first)
+gtatools ped check "D:\mods\peds"
+gtatools ped fix "D:\mods\peds" --apply
+```
+
+## Performance notes
+
+- Parsing a `.ytd` costs about 1.5 s per file through CodeWalker, so a 40-archive pack takes ~25 s to
+  scan; the GUI does that in the background.
+- Shrinking is dominated by texture count and size, not by the archive: a 76-archive car pack takes
+  a few minutes because every texture is decoded and re-encoded.
+- Estimates are reported two ways — **VRAM** (the decoded footprint, what matters in game) and
+  **file size** (what the game loads from disk). In gen9 the archive is zlib-compressed, so the file
+  number is much smaller than the VRAM number.
+
+
+## Features
+
+- **Normal map generate** — single `.dds` or a whole folder, tunable parameters; builds normal maps for vehicle badges and writes them next to the source.
+- **Texture compression** — batch-shrink the textures inside `.ytd` files and write them back to the same folder; the original file is backed up as `.bak`.
+- **Mipmap check & fill** — detect missing mip levels and fill the chain automatically; fixes shimmer and moire at distance and cuts render cost. The original `.ytd` / `.dds` is backed up as `.bak`.
+- **PED YMT repair** — validate a `.ymt` against its `.ydd`, correct the parameter drift; fixes misplaced parts, broken LODs, wrong textures, random loading and spawn crashes.
+
+## 功能简介
+
+- **法线生成** — 支持单张 DDS 或批量目录导入，可配置参数，专为车标贴图生成法线贴图，输出至原目录。
+- **纹理压缩** — 批量压缩 YTD 内贴图，输出至同目录；原文件自动备份为 `.bak`。
+- **Mipmap 校验与补全** — 检测贴图 Mip 链缺失，自动补齐 Mip 层级，改善远距离贴图闪烁、摩尔纹问题，优化渲染性能；原 YTD/DDS 自动备份为 `.bak`。
+- **PED YMT 修复** — 校验 YMT 与 YDD 资源匹配关系，修正参数偏差，解决模型错位、LOD 异常、贴图错乱、随机加载及 Spawn 崩溃。
+
+支持 **Enhanced（gen9）与 Legacy（gen8）** 贴图与 PED 文件（`.ydd` 头部是 RSC7 v165 就按 Legacy 读）。本工具只改贴图与 `.ymt` 参数，不修复模型本体，也不替代 OpenIV / CodeWalker / Sollumz。
 
 ![flat diffuse on the left, the same texture lit with a generated normal map on the right](docs/images/hero.png)
 
@@ -177,13 +261,25 @@ A small desktop window ships next to the CLI, for people who would rather not ty
 
 ![gtatools GUI, dark theme](docs/images/gui-dark.png)
 
+![the parameter help bubble](docs/images/gui-help.png)
+
 - pick files, or a whole folder (it walks subdirectories for `*.dds`)
-- strength / blur / alpha weight sliders, format, resize and mip options
-- a live preview: diffuse, generated normal, and a shaded result
-- batch run with a progress bar, per-file log and cancel
-- output lands in `normals\` next to each input, so nothing is overwritten
-- English / Chinese and light / dark, switchable in the header; the last choice is remembered
+- strength / blur / alpha weight sliders, format, resize and mip options; the `?`
+  next to *Parameters* explains each one, including what vanilla badges measure
+- three live previews: the source texture, the generated normal, and a shaded result
+- batch run with a progress bar, an English one-line-per-file log and cancel
+- output lands in `normals\` next to each input, so nothing is overwritten; if that
+  folder refuses the write it falls back to `_n_2.dds`, `_n_3.dds` …
+- scratch files go to `%TEMP%\gtatools\` and are deleted as the run proceeds
+- English / Chinese and light / dark, as fixed-width switches in the header; the last
+  choice is remembered
 - texconv.exe is bundled in the packaged build, so it needs no Python and no setup
+- three pages in the sidebar: **Normal map (DDS)**, **Mip check (DDS)** and
+  **Texture compression (YTD)**
+
+![the MIP check page](docs/images/gui-mips.png)
+
+![the texture compression page](docs/images/gui-ytd.png)
 
 Run it from a checkout with `python -m gtatools.gui` (or `gtatools-gui` after `pip install -e .`).
 To build the Windows exe:
@@ -199,12 +295,35 @@ pyinstaller --noconfirm --clean --onefile --windowed --name gtatools \
 ```
 
 The one-file build unpacks itself next to the exe (`--runtime-tmpdir .`), so it starts
-even where `%TEMP%` is locked down; keep it in a folder you can write to. For a build that
-never unpacks anything, use `--onedir` instead.
+even where `%TEMP%` is locked down; keep it in a folder you can write to. Protected
+folders (the Desktop under Defender's controlled-folder access, for instance) block that
+unpack — build with `--onedir` for those, since a folder build never unpacks anything and
+runs from wherever it sits.
+
+## Texture compression (YTD)
+
+The third page shrinks the textures inside an existing `.ytd` and writes a copy next to
+it, so you can keep the original:
+
+- **Cap** - any texture whose long edge is above the limit is scaled down to it
+- **Tier** - the long edge snaps to 1024 / 1536 / 2048, whichever is closest below
+- **Aggressive** - Cap, plus format swaps that are safe to automate: uncompressed becomes
+  DXT5, an opaque DXT5 becomes DXT1. Normal maps and `spec` / `gloss` / `dirt` / `mask`
+  style textures keep their format, `script_rt_*` ones are never touched, and anything
+  under 1024 px is left alone
+
+Mip chains are rebuilt for the new size when the source had them, and kept at one level
+when it did not. The result is `lite.ytd` (or `lite_2.ytd`, `lite_3.ytd` …) plus
+`lite_report.txt`, which lists every texture and what happened to it.
+
+Packing needs [CodeWalker](https://dexyfex.com/)'s `CodeWalker.Core.dll` - point the page
+at that folder once and it is remembered. Archives are read and written in the same
+version they came in: RSC7 version 5 is GEN9 and is tagged that way in the list, version
+13 is Legacy, and the page warns before you compress one.
 
 ## Use it as a DeepSeek Harness plugin
 
-`dsh-plugin/` is an installable DSH bundle that exposes the same six operations as agent tools
+`dsh-plugin/` is an installable DSH bundle that exposes the same eight operations as agent tools
 (`gta_badge_normal`, `gta_ymt_audit`, `gta_ytd_scale`, `gta_ytd_pack`, `gta_ytd_list`, `gta_mips_check`).
 The Python package is vendored inside, so nothing needs to be pip-installed.
 
@@ -307,7 +426,7 @@ python -m unittest discover -s tests -v
 src/gtatools/       cli.py, dds.py, normals.py, ymt.py, cw.py, ytd.py, gui.py
 tests/              test_core.py
 resources/          pack_ytd.ps1
-dsh-plugin/         DSH bundle (six agent tools, index.js, locale/, vendor/gtatools, icon.svg)
+dsh-plugin/         DSH bundle (nine agent tools, index.js, locale/, vendor/gtatools, icon.svg)
 packaging/          PyInstaller entry point for the GUI
 market/             market index entry
 docs/               docs/README.md and docs/images/ artwork

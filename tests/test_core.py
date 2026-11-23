@@ -219,3 +219,36 @@ class WorkDirTest(unittest.TestCase):
         parser = cli.build_parser()
         a = parser.parse_args(["pack", "--xml", "a.ytd.xml", "--build", "b"])
         self.assertEqual(a.out, "")
+
+class PedLegacyTest(unittest.TestCase):
+    def _fake(self, version):
+        import struct
+        from tempfile import NamedTemporaryFile
+
+        fh = NamedTemporaryFile(suffix=".ydd", delete=False)
+        fh.write(b"RSC7" + struct.pack("<I", version) + b"\0" * 32)
+        fh.close()
+        self.addCleanup(os.unlink, fh.name)
+        return fh.name
+
+    def test_detects_gen8(self):
+        from gtatools.ped import legacy_for
+
+        self.assertTrue(legacy_for(self._fake(165)))
+
+    def test_detects_gen9(self):
+        from gtatools.ped import legacy_for
+
+        self.assertFalse(legacy_for(self._fake(159)))
+
+    def test_missing_header_is_not_legacy(self):
+        from tempfile import NamedTemporaryFile
+
+        from gtatools.ped import legacy_for
+
+        fh = NamedTemporaryFile(suffix=".ydd", delete=False)
+        fh.write(b"nope")
+        fh.close()
+        self.addCleanup(os.unlink, fh.name)
+        self.assertFalse(legacy_for(fh.name))
+

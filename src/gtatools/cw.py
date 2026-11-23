@@ -52,6 +52,29 @@ def _ancestors(start: str, depth: int = 4) -> list[str]:
     return out
 
 
+def candidates(start: str = "") -> list[str]:
+    """Every CodeWalker folder we can find, newest build first."""
+    seen: dict[str, float] = {}
+    for value in (os.environ.get("GTA_TOOLS_CW", ""), os.environ.get("CODEWALKER_DIR", "")):
+        if _has_core(value):
+            seen[os.path.abspath(value)] = os.path.getmtime(os.path.join(value, CORE_DLL))
+    for candidate in _common_paths():
+        if _has_core(candidate):
+            path = os.path.abspath(candidate)
+            try:
+                seen[path] = os.path.getmtime(os.path.join(path, CORE_DLL))
+            except OSError:
+                seen[path] = 0.0
+    for base in _ancestors(start or os.getcwd()):
+        if _has_core(base):
+            path = os.path.abspath(base)
+            try:
+                seen.setdefault(path, os.path.getmtime(os.path.join(path, CORE_DLL)))
+            except OSError:
+                seen.setdefault(path, 0.0)
+    return [p for p, _ in sorted(seen.items(), key=lambda kv: kv[1], reverse=True)]
+
+
 def find_corewalker(explicit: str = "", start: str = "") -> str | None:
     """Locate a CodeWalker directory containing CodeWalker.Core.dll.
 
@@ -66,9 +89,9 @@ def find_corewalker(explicit: str = "", start: str = "") -> str | None:
         if _has_core(value):
             return os.path.abspath(value)
 
-    for candidate in _common_paths():
-        if _has_core(candidate):
-            return os.path.abspath(candidate)
+    found = candidates(start)
+    if found:
+        return found[0]
 
     for base in _ancestors(start or os.getcwd()):
         if _has_core(base):

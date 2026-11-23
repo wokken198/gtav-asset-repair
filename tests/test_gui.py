@@ -47,6 +47,23 @@ class GuiImportTest(unittest.TestCase):
 
         self.assertEqual(set(gui.THEMES["light"]), set(gui.THEMES["dark"]))
 
+    def test_help_text_covers_every_parameter(self):
+        from gtatools import gui
+
+        wanted = {"en": ("Strength", "Blur", "Alpha"), "zh": ("强度", "模糊", "Alpha")}
+        for lang, words in wanted.items():
+            text = gui.LANG[lang]["help.params"]
+            for word in words:
+                self.assertIn(word, text, "%s help is missing %s" % (lang, word))
+
+    def test_log_lines_are_english(self):
+        from gtatools import gui
+
+        for lang in ("en", "zh"):
+            for key, value in gui.LANG[lang].items():
+                if key.startswith("log."):
+                    self.assertTrue(value.isascii(), "%s is not English" % key)
+
 
 if __name__ == "__main__":
     unittest.main()

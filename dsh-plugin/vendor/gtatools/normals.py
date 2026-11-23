@@ -53,11 +53,14 @@ def normal_from_height(h: np.ndarray, strength: float = 6.5, flat_margin: bool =
     return out
 
 
-def shade_preview(rgba: np.ndarray, normal: np.ndarray, light=(-0.4, -0.6, 0.7)) -> np.ndarray:
+def shade_preview(rgba: np.ndarray, normal: np.ndarray, light=(-0.4, -0.6, 0.7),
+                  ambient: float = 0.35, diffuse: float = 0.85, spec: float = 0.0) -> np.ndarray:
     n = normal.astype(np.float32) / 127.5 - 1.0
     n /= np.maximum(np.linalg.norm(n, axis=2, keepdims=True), 1e-5)
     lam = np.clip(n @ np.asarray(light, np.float32), 0, 1)[..., None]
-    rgb = rgba[..., :3] * (0.35 + 0.85 * lam)
+    rgb = rgba[..., :3] * (ambient + diffuse * lam)
+    if spec:
+        rgb = rgb + spec * np.power(lam, 18)
     a = rgba[..., 3:4]
     return np.clip(rgb * a + (1 - a), 0, 1)
 

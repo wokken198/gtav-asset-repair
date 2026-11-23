@@ -4,6 +4,112 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-11-23
+
+### Added
+- **Legacy (gen8) ped support**: `ped check` / `ped fix` pick the CodeWalker loader from the
+  `.ydd` header (RSC7 v165 = Legacy, v159 = Enhanced), so addon peds exported for the old game
+  are audited and repaired without a flag. `ped check --json` reports a `legacy` field and the
+  human output tags those rows `gen8`.
+- `--legacy` switches on `ped_export.ps1` / `ymt_pack.ps1`, and `ped.legacy_for()` as the single
+  place that decides which loader a pair needs.
+- Documentation assets: `docs/sample/` (three self-drawn 256 px badges plus a README) and
+  `docs/images/sample-compare.png`, so the normal-map effect can be judged without game assets.
+- README sections `Scope: what this is, and what it is not`, a support matrix per area,
+  `Safety rules the tools follow`, `Try it in one minute` and `Performance notes`.
+
+### Changed
+- Project positioning is now **Enhanced & Legacy**: window title, tagline, bundle description and
+  README all say so instead of implying Enhanced-only.
+- `ped fix` refuses to write when the local CodeWalker build shuffles `.ymt` components, naming
+  the build instead of producing a broken file (dev48 writes both generations incorrectly;
+  ModDropV-class builds are fine).
+
+### Fixed
+- `legacy_for()` treated a missing or truncated header as Enhanced by accident; it now has an
+  explicit test for that case.
+- README still claimed the ped tools were Enhanced-only after the loader switch landed.
+
+## [0.5.1] - 2026-11-23
+
+### Added
+- `gtatools ped check` — audit every `.ydd` / `.ymt` pair and report the ones whose
+  declared drawables or texture counts disagree with the geometry (`--json` writes a report).
+- `gtatools ped fix` — repair those pairs (`--apply`; a `.bak` is kept next to each file).
+- DSH bundle: `gta_ytd_lite`, `gta_ped_check` and `gta_ped_fix`, so the GUI's two new pages are
+  reachable from an agent session as well (nine tools in total).
+
+### Changed
+- GUI: texture compression and mip repair now write **in place** and keep the previous file as
+  `.bak`; the CLI still defaults to a separate `_lite` / `_mips` file and takes `--inplace`.
+- Page copy rewritten for all four pages (Chinese and English), including what each tool fixes
+  and the `.bak` behaviour; the same wording heads the README.
+
+### Fixed
+- CLI crashed with `UnicodeEncodeError` on a GBK console whenever an error message contained a
+  character the console could not encode.
+- Corrupt archives with an `RSC7` header reached CodeWalker and surfaced a raw PowerShell error;
+  the header and version are now validated first and the message says what is wrong.
+- PowerShell output is decoded as UTF-8 with a GBK fallback instead of showing `?` on Chinese
+  Windows, and the script-path prefix is stripped from error text.
+- The page subtitle ran past the window edge once the copy got longer; it now wraps.
+
+## [0.5.0] - 2026-11-22
+
+### Added
+- GUI: MIP check page for `.dds` and `.ytd` - lists every texture whose mip chain is
+  shorter than the size demands.
+- GUI: texture compression page for `.ytd` - Cap / Tier / Aggressive modes, a long-edge
+  limit, a plan table, `lite.ytd` plus `lite_report.txt` next to the input.
+- `lite` command in the CLI: `gtatools lite file.ytd --mode cap --cap 1024`.
+- `resources/ytd_export.ps1`: exports a dictionary through CodeWalker to an XML plus DDS
+  files, used by both the page and the CLI.
+- `src/gtatools/lite.py`: sizing rules, format policy, XML rewrite, texconv resizing and a
+  read-back self check of the written archive.
+
+### Changed
+- The sidebar is now three features - Normal map (DDS), Mip check (DDS), Texture
+  compression (YTD) - instead of four entries, and the YTD list viewer folded into the
+  MIP check.
+- Log lines stay English and one line per file, including the full output path.
+
+### Fixed
+- PowerShell variable names are case-insensitive: the export script no longer shadows its
+  own `$Ytd` parameter and passes the dictionary object through as `$dict`.
+- XML entries written as `<Width value="256" />` are parsed as well as `<Width>256</Width>`.
+- The aggressive mode falls back to the Cap rule instead of the Tier rule.
+
+## [0.4.1] - 2026-11-22
+
+### Added
+
+- A help bubble on the parameters card: every slider explains what it does, what
+  vanilla car badges measure, and which value this tool recommends.
+- Three-pane preview: the source texture, the generated normal map, and a shaded
+  result, side by side.
+- Scratch files live in `%TEMP%\gtatools\run-<id>` (with `%LOCALAPPDATA%`, the exe
+  folder and the input folder as fallbacks) and are deleted as soon as they are used.
+
+### Changed
+
+- The language and theme toggles in the header are fixed-width slider switches, so
+  switching EN/ZH no longer shifts the neighbouring control.
+- File card buttons are ordered `Add files · Add folder · Remove` with `Clear` on the
+  far right.
+- Log lines are English only, one line per file, and name the full output path.
+- The default strength is now 4.5 — slightly above what vanilla badges measure
+  (median slope 0.7-2°, bevels 25-35°) instead of the previous 6.5.
+
+### Fixed
+
+- `texconv.exe` is located inside the frozen bundle and next to the exe, so a
+  packaged build starts even when the working directory is elsewhere.
+- Child processes no longer flash a console window during preview or generation.
+- A result that cannot be written next to the input falls back to `_n_2.dds`,
+  `_n_3.dds` … and finally to the user profile, instead of failing the file.
+- The worker thread no longer reads Tk variables, which raised
+  `RuntimeError: main thread is not in main loop` on some machines.
+
 ## [0.4.0] - 2026-11-22
 
 ### Added

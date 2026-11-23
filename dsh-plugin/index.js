@@ -234,4 +234,81 @@ export function apply(ctx) {
 			},
 		),
 	);
+
+	ctx.tools.register(
+		tool(
+			"gta_ytd_lite",
+			"Shrink the textures inside .ytd files: rescale oversized ones and drop the extra memory, writing the result back to the same folder. Modes: cap (anything longer than the limit is scaled down to it), tier (long edge snaps to 1024/1536/2048), agg (cap plus format swaps: uncompressed to DXT5, opaque DXT5 to DXT1 - test in game). Textures under 1024 px and script_rt_* / normal / spec maps are left alone; with inplace the original becomes .bak.",
+			{
+				files: {
+					type: "array",
+					items: { type: "string" },
+					description: "One or more .ytd files, or folders to scan recursively",
+				},
+				mode: { type: "string", enum: ["cap", "tier", "agg"], description: "Compression mode. Default cap" },
+				cap: { type: "integer", enum: [1024, 1536, 2048], description: "Long-edge limit for cap / agg. Default 1024" },
+				inplace: { type: "boolean", description: "Write over the source, keeping the original as .bak. Default false (writes <name>_lite.ytd)" },
+				out: stringProp("Output .ytd path or folder; single input and no inplace only"),
+				json: stringProp("Optional path for a JSON report"),
+			},
+			["files"],
+			async (args) => {
+				const argv = ["lite", ...args.files];
+				if (args.mode !== undefined) argv.push("--mode", args.mode);
+				if (args.cap !== undefined) argv.push("--cap", String(args.cap));
+				if (args.inplace === true) argv.push("--inplace");
+				if (args.out !== undefined) argv.push("--out", args.out);
+				if (args.json !== undefined) argv.push("--json", args.json);
+				const core = coreDir();
+				if (core.length > 0) argv.push("--core-dir", core);
+				return clip(await run(argv, 900000));
+			},
+		),
+	);
+
+	ctx.tools.register(
+		tool(
+			"gta_ped_check",
+			"Audit ped variation files: for every .ydd / .ymt pair, verify that the .ymt declares exactly the drawables and texture counts the .ydd has (availComp slots, numAvailTex, compInfos). Prints one line per ped plus a summary and exits non-zero on any mismatch. Mismatches show up in game as misplaced parts, broken LODs and spawn crashes.",
+			{
+				paths: {
+					type: "array",
+					items: { type: "string" },
+					description: "Ped folders, or a .ydd / .ymt file",
+				},
+				json: stringProp("Optional path for a JSON report"),
+			},
+			["paths"],
+			async (args) => {
+				const argv = ["ped", "check", ...args.paths];
+				if (args.json !== undefined) argv.push("--json", args.json);
+				const core = coreDir();
+				if (core.length > 0) argv.push("--core-dir", core);
+				return clip(await run(argv, 900000));
+			},
+		),
+	);
+
+	ctx.tools.register(
+		tool(
+			"gta_ped_fix",
+			"Repair ped variation files: trims the .ymt down to the drawables the .ydd actually ships, or corrects the texture counts, then re-reads the result to prove it parsed back. Dry run unless apply is true; a .bak is kept next to every file it rewrites.",
+			{
+				paths: {
+					type: "array",
+					items: { type: "string" },
+					description: "Ped folders, or a .ydd / .ymt file",
+				},
+				apply: { type: "boolean", description: "Write the repaired .ymt (default: report what would change only)" },
+			},
+			["paths"],
+			async (args) => {
+				const argv = ["ped", "fix", ...args.paths];
+				if (args.apply === true) argv.push("--apply");
+				const core = coreDir();
+				if (core.length > 0) argv.push("--core-dir", core);
+				return clip(await run(argv, 900000));
+			},
+		),
+	);
 }

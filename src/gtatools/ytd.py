@@ -10,13 +10,40 @@ import json
 import os
 import struct
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from typing import Iterable
 
 from . import cw
 
-DEFAULT_PS1 = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                           "resources", "ytd_inspect.ps1")
+if sys.platform == "win32":
+    _NO_WINDOW = subprocess.CREATE_NO_WINDOW
+    _HIDDEN = subprocess.STARTUPINFO()
+    _HIDDEN.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+else:
+    _NO_WINDOW = 0
+    _HIDDEN = None
+
+def _find_resource(name: str) -> str:
+    """Locate a bundled .ps1: PyInstaller temp dir, exe dir, then the source tree."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = []
+    mei = getattr(sys, "_MEIPASS", "")
+    if mei:
+        candidates.append(os.path.join(mei, name))
+        candidates.append(os.path.join(mei, "resources", name))
+    exe_dir = os.path.dirname(os.path.abspath(sys.argv[0] or ""))
+    candidates.append(os.path.join(exe_dir, name))
+    candidates.append(os.path.join(exe_dir, "resources", name))
+    candidates.append(os.path.join(here, name))
+    candidates.append(os.path.join(here, "..", "..", "resources", name))
+    candidates.append(os.path.join(os.getcwd(), "resources", name))
+    for path in candidates:
+        if path and os.path.isfile(path):
+            return os.path.abspath(path)
+    return os.path.abspath(os.path.join(here, "..", "..", "resources", name))
+
+DEFAULT_PS1 = _find_resource("ytd_inspect.ps1")
 
 # RSC7 header: "RSC7" + int32 version. Gen9 texture dictionaries are 5, legacy ones 13.
 YTD_VERSION_GEN9 = 5
@@ -89,7 +116,8 @@ def inspect(paths: Iterable[str], core_dir: str = "", ps1: str = DEFAULT_PS1,
                "-CoreDir", core, "-Ytd", path]
         if legacy:
             cmd.append("-Legacy")
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              creationflags=_NO_WINDOW, startupinfo=_HIDDEN)
         got = 0
         for line in (proc.stdout or "").splitlines():
             line = line.strip()

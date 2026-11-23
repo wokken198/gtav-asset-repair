@@ -1,7 +1,7 @@
 {
   "name": "dsh-gta-tools",
-  "version": "0.4.0",
-  "description": "GTA V badge normal maps, YMT audits and YTD packing as DeepSeek Harness tools",
+  "version": "0.6.0",
+  "description": "GTA V texture toolkit for Enhanced & Legacy: badge normal maps, YTD shrink, mip fill, ped YMT check/repair",
   "license": "MIT",
   "type": "module",
   "exports": {

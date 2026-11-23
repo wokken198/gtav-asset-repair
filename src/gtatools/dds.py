@@ -9,6 +9,7 @@ import os
 import shutil
 import struct
 import subprocess
+import sys
 from dataclasses import dataclass
 
 # fourCC -> texconv -f value
@@ -79,9 +80,43 @@ def read_header(path: str) -> Header:
 
 TEXCONV_NAMES = ("texconv.exe", "texconv")
 
+if sys.platform == "win32":
+    _NO_WINDOW = subprocess.CREATE_NO_WINDOW
+    _HIDDEN = subprocess.STARTUPINFO()
+    _HIDDEN.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+else:
+    _NO_WINDOW = 0
+    _HIDDEN = None
+
+
+def _run_hidden(cmd: list[str]) -> None:
+    """Run a helper without flashing a console window (packaged builds have none)."""
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True,
+                   creationflags=_NO_WINDOW, startupinfo=_HIDDEN)
+
+
+def _search_dirs() -> list[str]:
+    """Places a bundled texconv can hide: PyInstaller unpack dir, exe dir, cwd and parents."""
+    seen, out = set(), []
+    for base in (getattr(sys, "_MEIPASS", None),
+                 os.path.dirname(os.path.abspath(sys.executable)) if sys.executable else None,
+                 os.getcwd()):
+        if not base:
+            continue
+        here = os.path.abspath(base)
+        for _ in range(5):
+            if here not in seen:
+                seen.add(here)
+                out.append(here)
+            parent = os.path.dirname(here)
+            if parent == here:
+                break
+            here = parent
+    return out
+
 
 def resolve_texconv(texconv: str) -> str:
-    """Find texconv: explicit path, then PATH, then the current and parent directories."""
+    """Find texconv: explicit path, PATH, PyInstaller dir, then exe dir / cwd and parents."""
     if texconv and os.path.exists(texconv):
         return texconv
     if texconv:
@@ -92,31 +127,24 @@ def resolve_texconv(texconv: str) -> str:
         found = shutil.which(name)
         if found:
             return found
-    here = os.getcwd()
-    for _ in range(4):
+    for here in _search_dirs():
         for name in TEXCONV_NAMES:
             candidate = os.path.join(here, name)
             if os.path.exists(candidate):
                 return candidate
-        parent = os.path.dirname(here)
-        if parent == here:
-            break
-        here = parent
     raise FileNotFoundError(
-        "texconv.exe not found: put it on PATH, pass --texconv, or set GTA_TOOLS_TEXCONV"
+        "texconv.exe not found: put it next to this program, on PATH, or set GTA_TOOLS_TEXCONV"
     )
 
 
 def decode(png_dir: str, dds_paths: list[str], texconv: str) -> None:
     os.makedirs(png_dir, exist_ok=True)
-    subprocess.run([resolve_texconv(texconv), "-ft", "png", "-y", "-o", png_dir] + dds_paths,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    _run_hidden([resolve_texconv(texconv), "-ft", "png", "-y", "-o", png_dir] + dds_paths)
 
 
 def encode(png_path: str, fmt: str, mips: int, out_dir: str, texconv: str) -> str:
     os.makedirs(out_dir, exist_ok=True)
-    subprocess.run([resolve_texconv(texconv), "-f", fmt, "-m", str(mips), "-y", "-o", out_dir, png_path],
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    _run_hidden([resolve_texconv(texconv), "-f", fmt, "-m", str(mips), "-y", "-o", out_dir, png_path])
     base = os.path.splitext(os.path.basename(png_path))[0]
     out = os.path.join(out_dir, base + ".DDS")
     if not os.path.exists(out):
