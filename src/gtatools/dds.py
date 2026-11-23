@@ -131,7 +131,7 @@ def resolve_texconv(texconv: str) -> str:
         for name in TEXCONV_NAMES:
             candidate = os.path.join(here, name)
             if os.path.exists(candidate):
-                return candidate
+                return os.path.abspath(candidate)
     raise FileNotFoundError(
         "texconv.exe not found: put it next to this program, on PATH, or set GTA_TOOLS_TEXCONV"
     )

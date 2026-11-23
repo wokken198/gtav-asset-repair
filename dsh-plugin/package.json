@@ -1,6 +1,6 @@
 {
   "name": "dsh-gta-tools",
-  "version": "0.6.1",
+  "version": "0.6.3",
   "description": "GTA V texture toolkit for Enhanced & Legacy: badge normal maps, YTD shrink, mip fill, ped YMT check/repair",
   "license": "MIT",
   "type": "module",

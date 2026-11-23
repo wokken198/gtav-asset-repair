@@ -22,34 +22,35 @@ import uuid
 from tkinter import filedialog, ttk
 
 import numpy as np
-from PIL import Image, ImageTk
+from PIL import Image, ImageDraw, ImageTk
 
 from . import dds as ddsmod
 from .normals import height_field, normal_from_height, shade_preview
 
-APP_TITLE = "gtatools - texture dictionary toolkit (Enhanced & Legacy)"
-VERSION = "0.6.1"
+APP_TITLE = "GTA5 tools - texture dictionary toolkit (Enhanced & Legacy)"
+VERSION = "0.6.3"
+ISSUE_URL = "https://github.com/wokken198/gtav-toolkit/issues"
 
 LANG = {
     "en": {
         "mips.skip_note": "script_rt_* render targets are skipped on purpose - their mip chain is not rebuilt",
         "help.script_rt": "script_rt_* textures are written by the game at runtime: dashboard dials, in-car screens, camera feeds.\nTheir mip chain follows the render-target size, so forcing extra mips blurs or breaks the live picture. The tool never touches them, so they stay listed as incomplete - that is expected.",
         "tagline": "Enhanced & Legacy textures",
-        "nav.ped": "Ped YMT repair\n(YDD/YMT)",
-    "nav.normal": "Normal map generate\n(DDS)",
-        "nav.mip": "Mip check\n(YTD/DDS)",
-        "nav.ytd": "Texture compression\n(YTD)",
+        "nav.ped": "Ped repair (YMT)",
+    "nav.normal": "Normal maps (DDS)",
+        "nav.mip": "Mip check (YTD)",
+        "nav.ytd": "Textures (YTD)",
         "title": "Badge normal map",
         "subtitle": "pick files or a folder, tune the slope, write next to the input",
-        "page.normals.title": "Normal map generate",
-        "page.normals.sub": "single .dds or a whole folder, tunable parameters; builds normal maps for vehicle badges and writes them next to the source",
+        "page.normals.title": "Generate Normal Maps",
+        "page.normals.sub": "Generate normal maps for vehicle badges from .dds files or entire folders. Features tunable parameters; outputs are saved next to the source files.",
         "report": "Report",
         "page.mips.title": "Mipmap check & fill",
-        "page.mips.sub": "detect missing mip levels and fill the chain automatically - fixes shimmer and moire at distance and cuts render cost; the original .ytd / .dds is backed up as .bak",
+        "page.mips.sub": "Detects missing mip levels and auto-fills the chain. Fixes distant shimmer/moire and cuts render cost. Original .ytd/.dds backed up as a .bak file.",
         "page.ytd.title": "Texture compression",
-        "page.ytd.sub": "batch-shrink the textures inside .ytd files and write them back to the same folder; the original file is backed up as .bak",
+        "page.ytd.sub": "Batch-compress textures within .ytd files and save them to the original folder. The original files are backed up as .bak.",
         "page.ped.title": "Ped YMT repair",
-    "page.ped.sub": "validate the .ymt against its .ydd and correct the parameter drift - fixes misplaced parts, broken LODs, wrong textures, random loading and spawn crashes",
+    "page.ped.sub": "Validate the .ymt against its .ydd and correct the parameter drift, which may cause misplaced parts, broken LODs, wrong textures, random loading and spawn crashes.",
     "ped.files": "PED files",
     "ped.add": "Add folder",
     "ped.clear": "Clear",
@@ -62,7 +63,7 @@ LANG = {
     "ped.fixing": "repairing {name} ...",
     "ped.checking": "checking {name} ...",
     "page.ped.title": "PED YMT 修复",
-    "page.ped.sub": "校验 YMT 与 YDD 资源匹配关系，修正参数偏差，解决模型错位、LOD 异常、贴图错乱、随机加载及 Spawn 崩溃",
+    "page.ped.sub": "Validate the .ymt against its .ydd and correct the parameter drift, which may cause misplaced parts, broken LODs, wrong textures, random loading and spawn crashes.",
     "ped.files": "PED 文件",
     "ped.add": "添加文件夹",
     "ped.clear": "清空",
@@ -94,7 +95,7 @@ LANG = {
         "ytd.cw_browse": "Browse",
         "ytd.cw_detect": "Detect",
         "ytd.cw_ok": "found",
-        "ytd.cw_missing": "not found - pick the CodeWalker folder",
+        "ytd.cw_missing": "not set",
         "ytd.files": "YTD files",
         "ytd.add": "Add YTD",
         "ytd.clear": "Clear",
@@ -159,7 +160,16 @@ LANG = {
         "maxmips": "Max mips",
         "out_hint": "output -> <input folder>",
         "generate": "Generate",
-        "cancel": "Cancel",
+        "cancel": "Stop",
+        "stopping": "stopping...",
+        "hint": "back up the original files first - then verify in game",
+        "note.before": "",
+        "note.backup": "Back up files before aggressive processing; test in-game afterward.",
+        "note.mid": "",
+        "note.test": "",
+        "note.after": "",
+        "note.bug": "Bug reports & inquiries:",
+        "busy_other": "another page is still working - wait for it to finish",
         "idle": "idle",
         "files_n": "{n} file(s)",
         "nothing": "nothing to do: add files first",
@@ -195,19 +205,19 @@ LANG = {
         "mips.skip_note": "脚本渲染目标贴图（script_rt_*）默认跳过，不补 mip",
         "help.script_rt": "script_rt_* 是游戏运行时写入的渲染目标（仪表盘、车载屏幕、镜头画面）。\n它们的 mip 链由渲染目标尺寸决定，人为补齐会让动态画面变糊甚至崩溃，所以工具一律不动它们，它们会一直显示为“缺”，属于正常。",
         "tagline": "增强版 & 旧版贴图",
-        "nav.ped": "PED YMT 修复\n（YDD/YMT）",
+        "nav.ped": "PED 修复（YMT）",
     "nav.normal": "法线生成（DDS）",
         "nav.mip": "MIP 检查（YTD/DDS）",
         "nav.ytd": "纹理压缩（YTD）",
         "title": "车标法线",
         "subtitle": "选择文件或文件夹，调整参数，结果写到输入所在目录",
-        "page.normals.title": "法线生成",
-        "page.normals.sub": "支持单张 DDS 或批量目录导入，可配置参数，专为车标贴图生成法线贴图，输出至原目录",
+        "page.normals.title": "生成法线贴图",
+        "page.normals.sub": "处理 .dds 文件或整个文件夹（支持参数调整）；为车辆徽章生成法线贴图，并将其保存在源文件同级目录下。",
         "report": "报告",
         "page.mips.title": "Mipmap 校验与补全",
-        "page.mips.sub": "检测贴图 Mip 链缺失，自动补齐 Mip 层级，改善远距离贴图闪烁、摩尔纹问题，优化渲染性能；原 YTD/DDS 自动备份为 .bak",
+        "page.mips.sub": "自动检测缺失的 mip 层级并填充链——修复远处的闪烁和摩尔纹，并降低渲染开销；原 .ytd/.dds 文件将备份为 .bak 文件。",
         "page.ytd.title": "纹理压缩",
-        "page.ytd.sub": "批量压缩 YTD 内贴图，输出至同目录；原文件自动备份为 .bak",
+        "page.ytd.sub": "批量缩小 .ytd 文件内的纹理，并将其保存回原文件夹；原文件将备份为 .bak 文件。",
         "mips.files": "文件",
         "mips.add": "添加 DDS / YTD",
         "mips.add_dir": "添加文件夹",
@@ -228,7 +238,7 @@ LANG = {
         "ytd.cw_browse": "浏览",
         "ytd.cw_detect": "自动探测",
         "ytd.cw_ok": "已找到",
-        "ytd.cw_missing": "未找到，请选择 CodeWalker 目录",
+        "ytd.cw_missing": "未设置",
         "ytd.files": "YTD 文件",
         "ytd.add": "添加 YTD",
         "ytd.clear": "清空",
@@ -265,7 +275,7 @@ LANG = {
         "ytd.mem": "显存  {before:.1f} MB -> {after:.1f} MB  ({pct}%)",
         "ytd.file": "文件  {before:.1f} MB -> {after:.1f} MB  ({pct}%)",
         "mode.cap": "封顶",
-        "mode.tier": "归档",
+        "mode.tier": "降档",
         "mode.agg": "换格式",
         "mode.cap.desc": "超过 {cap} 的贴图缩到 {cap}；长边低于 1024 的不动。",
         "mode.tier.desc": "长边就近下调到 1024 / 1536 / 2048。",
@@ -292,7 +302,16 @@ LANG = {
         "maxmips": "最大 mip",
         "out_hint": "输出 -> <输入目录>",
         "generate": "开始生成",
-        "cancel": "取消",
+        "cancel": "停止",
+        "stopping": "正在停止...",
+        "hint": "动手前先备份原件 - 改完请进游戏验证",
+        "note.before": "",
+        "note.backup": "处理前请备份文件，处理后请在游戏内测试。",
+        "note.mid": "",
+        "note.test": "",
+        "note.after": "",
+        "note.bug": "Bug 反馈与咨询：",
+        "busy_other": "另一页还在运行 - 请等它结束",
         "idle": "空闲",
         "files_n": "{n} 个文件",
         "nothing": "没有可处理的内容：先添加文件",
@@ -330,7 +349,7 @@ LANG = {
 PED_TEXT = {
     "en": {
         "page.ped.title": "Ped YMT repair",
-        "page.ped.sub": "validate the .ymt against its .ydd and correct the parameter drift - fixes misplaced parts, broken LODs, wrong textures, random loading and spawn crashes",
+        "page.ped.sub": "Validate the .ymt against its .ydd and correct the parameter drift, which may cause misplaced parts, broken LODs, wrong textures, random loading and spawn crashes.",
         "ped.files": "PED files",
         "ped.add": "Add folder",
         "ped.clear": "Clear",
@@ -351,7 +370,7 @@ PED_TEXT = {
     },
     "zh": {
         "page.ped.title": "PED YMT 修复",
-        "page.ped.sub": "校验 YMT 与 YDD 资源匹配关系，修正参数偏差，解决模型错位、LOD 异常、贴图错乱、随机加载及 Spawn 崩溃",
+        "page.ped.sub": "用对应的 ydd 校验 .ymt，并纠正参数漂移；该问题可能导致部件错位、LOD 断裂、纹理错误、随机加载及生成崩溃。",
         "ped.files": "PED 文件",
         "ped.add": "添加文件夹",
         "ped.clear": "清空",
@@ -377,19 +396,21 @@ LANG["en"].update({k: v for k, v in PED_TEXT["en"].items()})
 LANG["zh"].update({k: v for k, v in PED_TEXT["zh"].items()})
 
 THEMES = {
-    "light": dict(bg="#f5f6f8", nav="#eceef2", card="#ffffff", hover="#eef1f5", inset="#f2f4f7",
-                  stroke="#d9dde4", stroke_hi="#b5bcc7", fg="#15181d", dim="#4a5361",
-                  faint="#8b93a1", accent="#0f9d67", accent_dark="#0b7a50", on_accent="#ffffff",
-                  green="#0f8f5f", danger="#d32f45", warning="#a9731b", track="#e2e5eb"),
+    "light": dict(bg="#edf1f7", nav="#e7ecf4", card="#ffffff", hover="#f1f5fa", inset="#f7f9fc",
+                  stroke="#dde4ee", stroke_hi="#b7c1d0", fg="#101725", dim="#48536a",
+                  faint="#7d8798", accent="#0f9d67", accent_dark="#0b7a50", on_accent="#ffffff",
+                  green="#0f8f5f", danger="#d32f45", warning="#a9731b", track="#dbe2ec",
+                  btn="#eef8f2", btn_hover="#d5efdf", btn_press="#c2e7d2", btn_stroke="#cfe7da"),
     "dark": dict(bg="#090a0c", nav="#060709", card="#111317", hover="#171b21", inset="#07080a",
                  stroke="#272c34", stroke_hi="#48515e", fg="#f4f6f9", dim="#a3aab5",
                  faint="#5b6471", accent="#34d094", accent_dark="#14885e", on_accent="#17130a",
-                 green="#45e09a", danger="#ff4858", warning="#ffbe4b", track="#2b3039"),
+                 green="#45e09a", danger="#ff4858", warning="#ffbe4b", track="#2b3039",
+                 btn="#131c18", btn_hover="#1c3128", btn_press="#254435", btn_stroke="#28382f"),
 }
 
 FORMATS = ["DXT1", "DXT5", "BC5_UNORM", "BC7_UNORM"]
-RESIZE_CHOICES = ["keep", "2048", "1536", "1024", "512", "256"]
-MIP_CHOICES = ["full", "12", "10", "9", "8"]
+RESIZE_CHOICES = ["KEEP", "2048", "1024", "512", "256", "128"]
+MIP_CHOICES = ["FULL", "13", "12", "11", "10", "9", "8", "7", "6"]
 
 
 def _config_dir() -> str:
@@ -423,6 +444,186 @@ def _mono(size: int):
     return ("Consolas" if sys.platform == "win32" else "Menlo", size)
 
 
+_ROUND_CACHE: dict = {}
+
+
+def _round_photo(app: "App", w: int, h: int, radius: int, fill: str, stroke: str | None = None):
+    """A cached rounded-rectangle photo; supersampled 2x so the corners stay clean."""
+    from PIL import ImageDraw
+
+    w, h = max(1, int(w)), max(1, int(h))
+    key = (w, h, radius, fill, stroke, getattr(app, "theme", ""))
+    photo = _ROUND_CACHE.get(key)
+    if photo is not None:
+        return photo
+    ss = 2
+    im = Image.new("RGBA", (w * ss, h * ss), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(im)
+    draw.rounded_rectangle((0, 0, w * ss - 1, h * ss - 1), radius=radius * ss, fill=fill)
+    if stroke:
+        # inset by half a pixel so the outline sits inside the fill and keeps the
+        # same silhouette as a borderless button
+        inset = ss // 2
+        draw.rounded_rectangle((inset, inset, w * ss - 1 - inset, h * ss - 1 - inset),
+                               radius=max(1, radius * ss - inset), outline=stroke, width=ss)
+    im = im.resize((w, h), Image.LANCZOS)
+    photo = ImageTk.PhotoImage(im)
+    _ROUND_CACHE[key] = photo
+    return photo
+
+
+class PillButton(tk.Canvas):
+    """A rounded button drawn on a canvas: primary / secondary / ghost, with hover and press."""
+
+    def __init__(self, master, app: "App", text: str, command=None, kind: str = "secondary",
+                 icon: str = ""):
+        self.app = app
+        self.kind = "primary" if kind in (True, "primary") else kind
+        self.command = command
+        self.icon = icon
+        self._text = text
+        self._state = "normal"
+        self._hover = False
+        self._press = False
+        self._pad = int(16 * app.sx)
+        self._h = int(34 * app.sx)
+        super().__init__(master, width=int(88 * app.sx), height=self._h, bg=app.c("bg"),
+                         highlightthickness=0, bd=0, cursor="hand2", takefocus=0)
+        self._pw = self._measure()
+        super().configure(width=self._pw)
+        if not hasattr(app, "pill_buttons"):
+            app.pill_buttons = []
+        app.pill_buttons.append(self)
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+        self.bind("<ButtonPress-1>", self._on_press)
+        self.bind("<ButtonRelease-1>", self._on_release)
+        self._photo = None
+        self._draw()
+
+    def _font(self):
+        return _font(9, True)
+
+    def _label(self) -> str:
+        return (self.icon + "  " if self.icon else "") + self._text
+
+    def _measure(self) -> int:
+        try:
+            tw = int(self.tk.call("font", "measure", self._font(), self._label()))
+        except tk.TclError:
+            tw = len(self._label()) * 7
+        return int(max(88 * self.app.sx, tw + self._pad * 2))
+
+    def _colors(self):
+        c = self.app.c
+        if self._state == "disabled":
+            return c("inset"), c("faint"), c("stroke")
+        if self.kind == "primary":
+            fill = c("accent_dark") if (self._hover or self._press) else c("accent")
+            return fill, c("on_accent"), None
+        if self.kind == "ghost":
+            fill = c("hover") if (self._hover or self._press) else c("bg")
+            return fill, c("fg") if self._hover else c("dim"), None
+        # secondaries sit on a faint green so they read as buttons at rest and
+        # deepen toward the accent under the pointer.
+        if self._press:
+            return c("btn_press"), c("accent_dark"), c("accent")
+        if self._hover:
+            return c("btn_hover"), c("accent_dark"), c("accent")
+        return c("btn"), c("dim"), c("btn_stroke")
+
+    def _draw(self):
+        if getattr(self, "_drawing", False):
+            return
+        self._drawing = True
+        try:
+            super().configure(bg=self.app.c("bg"))
+            self.delete("all")
+            fill, fg, stroke = self._colors()
+            radius = int(8 * self.app.sx)
+            self._photo = _round_photo(self.app, self._pw, self._h, radius, fill, stroke)
+            self.create_image(0, 0, image=self._photo, anchor="nw")
+            self.create_text(self._pw / 2, self._h / 2 + 1, text=self._label(), fill=fg,
+                             font=self._font())
+        finally:
+            self._drawing = False
+
+    def _on_enter(self, _e=None):
+        if self._state == "disabled":
+            return
+        self._hover = True
+        self._draw()
+
+    def _on_leave(self, _e=None):
+        self._hover = False
+        self._press = False
+        self._draw()
+
+    def _on_press(self, _e=None):
+        if self._state == "disabled":
+            return
+        self._press = True
+        self._draw()
+
+    def _on_release(self, _e=None):
+        if self._state == "disabled":
+            return
+        self._press = False
+        self._draw()
+        if self.command:
+            self.command()
+
+    def configure(self, **kw):
+        if "text" in kw:
+            self._text = kw.pop("text")
+            self._pw = self._measure()
+            kw["width"] = self._pw
+        if "state" in kw:
+            self._state = kw.pop("state")
+        if kw:
+            super().configure(**kw)
+        if self._photo is not None:
+            self._draw()
+
+    config = configure
+
+    def cget(self, key):
+        if key == "text":
+            return self._text
+        if key == "state":
+            return self._state
+        return super().cget(key)
+
+    def invoke(self):
+        if self._state != "disabled" and self.command:
+            self.command()
+
+
+class Dot(tk.Canvas):
+    """A small round status dot."""
+
+    def __init__(self, master, app: "App", color_key: str = "faint", size: int = 8):
+        px = max(6, int(size * app.sx))
+        super().__init__(master, width=px, height=px, bg=app.c("bg"),
+                         highlightthickness=0, bd=0)
+        self.app = app
+        self.color_key = color_key
+        self._px = px
+        if not hasattr(app, "dots"):
+            app.dots = []
+        app.dots.append(self)
+        self.redraw()
+
+    def redraw(self, color_key: str | None = None):
+        if color_key:
+            self.color_key = color_key
+        self.configure(bg=self.app.c("bg"))
+        self.delete("all")
+        pad = 1
+        self.create_oval(pad, pad, self._px - pad, self._px - pad,
+                         fill=self.app.c(self.color_key), outline="")
+
+
 class Switch(tk.Canvas):
     """Two labels with a track between them; the knob eases from side to side."""
 
@@ -444,24 +645,27 @@ class Switch(tk.Canvas):
         self.bind("<Button-1>", self._click)
         app.switches.append(self)
 
-    def _pill(self, x0, y0, x1, y1, fill):
-        r = min((y1 - y0) / 2, (x1 - x0) / 2)
-        pts = [x0 + r, y0, x1 - r, y0, x1, y0 + (y1 - y0) / 2, x1 - r, y1, x0 + r, y1,
-               x0, y0 + (y1 - y0) / 2]
-        self.create_polygon(pts, smooth=True, splinesteps=24, fill=fill, outline="")
+    def _round(self, x0, y0, x1, y1, r, fill, outline=""):
+        """Rounded rectangle with a fixed corner radius (not a capsule)."""
+        r = min(r, (x1 - x0) / 2, (y1 - y0) / 2)
+        pts = [x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r,
+               x1, y1 - r, x1, y1, x1 - r, y1, x0 + r, y1,
+               x0, y1, x0, y1 - r, x0, y0 + r, x0, y0]
+        self.create_polygon(pts, smooth=True, splinesteps=16, fill=fill, outline=outline)
 
     def redraw(self):
         c = self.app.c
         L, T, H = self._each, self._track, self._h
         self.configure(bg=c("bg"))
         self.delete("all")
-        ty0, ty1 = H / 2 - 8, H / 2 + 8
-        self._pill(L, ty0, L + T, ty1, c("inset"))
-        d = 20
+        ty0, ty1 = H / 2 - 9, H / 2 + 9
+        on = self._pos >= 0.5
+        self._round(L, ty0, L + T, ty1, 8, c("accent") if on else c("track"))
+        d = 14
         travel = T - d - 4
         kx = L + 2 + travel * self._pos
-        self.create_oval(kx, H / 2 - d / 2, kx + d, H / 2 + d / 2,
-                         fill=c("accent"), outline=c("accent_dark"), width=1)
+        self._round(kx, H / 2 - d / 2, kx + d, H / 2 + d / 2, 5,
+                    c("card"), c("stroke"))
         for i, (_code, text) in enumerate(self.options):
             cx = L / 2 if i == 0 else L + T + L / 2
             self.create_text(cx, H / 2 + 1, text=text,
@@ -555,30 +759,233 @@ class HelpDot(tk.Canvas):
         self._draw()
 
 
+
+class FileList(tk.Frame):
+    """ttk.Treeview dressed up as a file list: 28 px rows, zebra stripes, hover.
+
+    Mirrors the handful of Listbox calls the pages already make, so swapping one in only
+    requires changing the constructor line.
+    """
+
+    def repaint(self):
+        """Re-apply the palette after a theme switch (styles are global, not per widget)."""
+        c = self.app.c
+        style = ttk.Style(self)
+        style.configure("Files.Treeview", background=c("inset"), fieldbackground=c("inset"),
+                        foreground=c("dim"), borderwidth=0, relief="flat",
+                        rowheight=int(20 * self.app.sx), font=_font(9))
+        style.map("Files.Treeview",
+                  background=[("selected", c("hover"))], foreground=[("selected", c("fg"))])
+        self.configure(bg=c("inset"))
+        self.scroll.configure(bg=c("inset"), troughcolor=c("inset"))
+        self.tree.tag_configure("odd", background=c("inset"))
+        self.tree.tag_configure("even", background=c("card"))
+        self.tree.tag_configure("hover", background=c("hover"))
+
+    def __init__(self, master, app, **kw):
+        pad = int(6 * app.sx)
+        super().__init__(master, bg=app.c("inset"), highlightthickness=0, bd=0)
+        style = ttk.Style(self)
+        style.theme_use("clam")
+        style.configure("Files.Treeview",
+                        background=app.c("inset"), fieldbackground=app.c("inset"),
+                        foreground=app.c("dim"), borderwidth=0, relief="flat",
+                        rowheight=int(20 * app.sx), font=_font(9))
+        style.map("Files.Treeview",
+                  background=[("selected", app.c("hover"))],
+                  foreground=[("selected", app.c("fg"))])
+        style.layout("Files.Treeview", [("Files.Treeview.treearea", {"sticky": "nswe"})])
+        self.app = app
+        app.file_lists.append(self)
+        self.tree = ttk.Treeview(self, style="Files.Treeview", show="",
+                                 selectmode="browse", columns=("name",))
+        self.tree.column("#1", anchor="w", stretch=True, width=int(200 * app.sx))
+        self.tree.tag_configure("odd", background=app.c("inset"))
+        self.tree.tag_configure("even", background=app.c("card"))
+        self.tree.tag_configure("hover", background=app.c("hover"))
+        self.scroll = tk.Scrollbar(self, command=self.tree.yview, bg=app.c("inset"),
+                                   troughcolor=app.c("inset"), highlightthickness=0, bd=0)
+        self.tree.configure(yscrollcommand=self.scroll.set)
+        self.scroll.pack(side="right", fill="y")
+        self.tree.pack(side="left", fill="both", expand=True, padx=pad, pady=pad)
+        self._hover_row = None
+        self._row_fg = {}
+        self.tree.bind("<Motion>", self._on_motion)
+        self.tree.bind("<Leave>", lambda _e: self._paint_hover(None))
+
+    # --- Listbox-shaped API -------------------------------------------------
+    def insert(self, index, text):
+        where = "end" if index in ("end", tk.END) else index
+        self.tree.insert("", where, values=(text,))
+        self._retag()
+
+    def _retag(self):
+        """Zebra every row, then re-apply any per-row foreground override."""
+        for i, item in enumerate(self.tree.get_children()):
+            tags = ["odd" if i % 2 == 0 else "even"]
+            colour = self._row_fg.get(i)
+            if colour:
+                name = "fg%d" % i
+                self.tree.tag_configure(name, foreground=colour)
+                tags.append(name)
+            self.tree.item(item, tags=tuple(tags))
+
+    def itemconfigure(self, index, **kw):
+        kids = self.tree.get_children()
+        if index in ("end", tk.END):
+            index = len(kids) - 1
+        if not isinstance(index, int) or not (0 <= index < len(kids)):
+            return
+        colour = kw.get("foreground")
+        if colour:
+            self._row_fg[index] = colour
+        elif colour == "":
+            self._row_fg.pop(index, None)
+        self._retag()
+
+    def set_row(self, index, text, fg=None):
+        """Rewrite one row in place (keeps the selection and the zebra order)."""
+        kids = self.tree.get_children()
+        if not isinstance(index, int) or not (0 <= index < len(kids)):
+            return
+        self.tree.item(kids[index], values=(text,))
+        if fg:
+            self._row_fg[index] = fg
+        self._retag()
+
+    def nearest(self, y):
+        item = self.tree.identify_row(y)
+        return self.tree.index(item) if item else -1
+
+    def delete(self, first, last=None):
+        kids = self.tree.get_children()
+        if first in (0, "0") and last in ("end", tk.END):
+            self.tree.delete(*kids)
+            self._row_fg.clear()
+            return
+        if isinstance(first, int):
+            self._row_fg.clear()
+            first = kids[first]
+        self.tree.delete(first)
+        self._retag()
+
+    def get(self, index, last=None):
+        kids = self.tree.get_children()
+        if last is not None:
+            return [str(self.tree.item(k, "values")[0]) for k in kids[index:last + 1]]
+        return str(self.tree.item(kids[index], "values")[0])
+
+    def size(self):
+        return len(self.tree.get_children())
+
+    def curselection(self):
+        return tuple(self.tree.index(i) for i in self.tree.selection())
+
+    def selection_clear(self, first=None, last=None):
+        self.tree.selection_remove(*self.tree.selection())
+
+    def selection_set(self, index):
+        kids = self.tree.get_children()
+        if 0 <= index < len(kids):
+            self.tree.selection_set(kids[index])
+
+    def see(self, index):
+        kids = self.tree.get_children()
+        if 0 <= index < len(kids):
+            self.tree.see(kids[index])
+
+    def bind(self, sequence=None, func=None, add=None):
+        if sequence == "<<ListboxSelect>>":
+            sequence = "<<TreeviewSelect>>"
+        return self.tree.bind(sequence, func, add)
+
+    def yview(self, *args):
+        return self.tree.yview(*args)
+
+    def configure(self, **kw):
+        mode = kw.get("selectmode")
+        if mode in ("browse", "extended", "none"):
+            self.tree.configure(selectmode=mode)
+        bg = kw.get("bg")
+        fg = kw.get("fg")
+        sel = kw.get("selectbackground")
+        style = ttk.Style(self)
+        if fg:
+            style.configure("Files.Treeview", foreground=fg)
+        if bg:
+            self.tree.tag_configure("odd", background=bg)
+            style.configure("Files.Treeview", fieldbackground=bg)
+        if sel:
+            style.map("Files.Treeview", background=[("selected", sel)])
+
+    config = configure
+
+    # --- hover --------------------------------------------------------------
+    def _paint_hover(self, tree_item):
+        if self._hover_row and self.tree.exists(self._hover_row):
+            base = "odd" if self.tree.index(self._hover_row) % 2 == 0 else "even"
+            tags = (base,)
+            colour = self._row_fg.get(self.tree.index(self._hover_row))
+            if colour:
+                tags = tags + ("fg%d" % self.tree.index(self._hover_row),)
+            self.tree.item(self._hover_row, tags=tags)
+        self._hover_row = tree_item
+        if tree_item and tree_item not in self.tree.selection():
+            self.tree.item(tree_item, tags=("hover",))
+
+    def _on_motion(self, event):
+        item = self.tree.identify_row(event.y)
+        if item != self._hover_row:
+            self._paint_hover(item or None)
+
+
 class Card(tk.Frame):
-    """A 1px-bordered panel with a small caps title and a padded body."""
+    """A rounded panel: a background canvas draws the card, children stack on top."""
 
     def __init__(self, master, app: "App", title_key: str = "", help_key: str = ""):
-        super().__init__(master, bg=app.c("card"), highlightbackground=app.c("stroke"),
-                         highlightthickness=1, bd=0)
+        super().__init__(master, bg=app.c("bg"), bd=0, highlightthickness=0)
         self.app = app
         self.active = False
         app.cards.append(self)
+        self._bg = tk.Canvas(self, bg=app.c("bg"), highlightthickness=0, bd=0)
+        self._bg.place(x=0, y=0, relwidth=1, relheight=1)
+        self._bg_img = None
         head = tk.Frame(self, bg=app.c("card"))
-        head.pack(fill="x", padx=14, pady=(9, 0))
+        head.pack(fill="x", padx=16, pady=(11, 0))
         app.style_widget(head, "card")
-        self.title = tk.Label(head, text="", bg=app.c("card"), fg=app.c("faint"), font=_font(9, True))
+        self.head = head
+        self.title = tk.Label(head, text="", bg=app.c("card"), fg=app.c("faint"),
+                              font=_font(9, True))
         self.title.pack(side="left")
         if help_key:
             self.help = HelpDot(head, app, help_key)
-            self.help.pack(side="left", padx=(7, 0), pady=(1, 0))
+            self.help.pack(side="left", padx=(7, 1), pady=(1, 0))
         self.body = tk.Frame(self, bg=app.c("card"))
-        self.body.pack(fill="both", expand=True, padx=14, pady=(10, 14))
-        app.style_widget(self, "card")
-        app.style_widget(self.title, "card", "faint")
+        self.body.pack(fill="both", expand=True, padx=16, pady=(10, 15))
         app.style_widget(self.body, "card")
+        app.style_widget(self.title, "card", "faint")
+        self.bind("<Configure>", self._on_resize)
         if title_key:
             app.bind_text(self.title, title_key)
+
+    def _on_resize(self, event=None):
+        self.paint()
+
+    def paint(self):
+        w = self.winfo_width()
+        h = self.winfo_height()
+        if w < 4 or h < 4:
+            return
+        self.configure(bg=self.app.c("bg"))
+        self._bg.configure(bg=self.app.c("bg"))
+        stroke = self.app.c("accent") if self.active else self.app.c("stroke")
+        self._bg_img = _round_photo(self.app, w, h, int(8 * self.app.sx),
+                                    self.app.c("card"), stroke)
+        self._bg.delete("all")
+        self._bg.create_image(0, 0, image=self._bg_img, anchor="nw")
+        # Canvas.lower() is the *item* command (needs a tag), so lower the widget itself.
+        self.tk.call("lower", self._bg._w)
+
 
 
 class Segmented(tk.Canvas):
@@ -644,6 +1051,60 @@ class Segmented(tk.Canvas):
         self.on_pick(code)
 
 
+class PillScale(tk.Canvas):
+    """Horizontal slider drawn on a canvas: rounded track, rounded thumb, theme aware."""
+
+    def __init__(self, master, app: "App", var, lo: float, hi: float, on_change):
+        self.app, self.var, self.lo, self.hi = app, var, lo, hi
+        self.on_change = on_change
+        h = int(18 * app.sx)
+        super().__init__(master, height=h, highlightthickness=0, bd=0,
+                         bg=app.c("card"), cursor="hand2")
+        self.bind("<Button-1>", self._jump)
+        self.bind("<B1-Motion>", self._jump)
+        self.bind("<Configure>", lambda _e: self.redraw())
+        app.pill_scales.append(self)
+
+    def _round(self, x0, y0, x1, y1, r, fill):
+        r = min(r, (x1 - x0) / 2, (y1 - y0) / 2)
+        pts = [x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r,
+               x1, y1 - r, x1, y1, x1 - r, y1, x0 + r, y1,
+               x0, y1, x0, y1 - r, x0, y0 + r, x0, y0]
+        self.create_polygon(pts, smooth=True, splinesteps=16, fill=fill, outline="")
+
+    def redraw(self):
+        c = self.app.c
+        self.configure(bg=c("card"))
+        self.delete("all")
+        w = max(self.winfo_width(), 40)
+        h = int(18 * self.app.sx)
+        mid = h / 2
+        track_h = int(6 * self.app.sx)
+        y0, y1 = mid - track_h / 2, mid + track_h / 2
+        self._round(0, y0, w, y1, track_h / 2, c("track"))
+        span = max(self.hi - self.lo, 1e-9)
+        frac = (float(self.var.get()) - self.lo) / span
+        frac = max(0.0, min(1.0, frac))
+        d = int(14 * self.app.sx)
+        travel = max(w - d, 1)
+        thumb = d / 2 + travel * frac
+        self._round(0, y0, max(thumb, track_h), y1, track_h / 2, c("accent"))
+        self._round(thumb - d / 2, mid - d / 2, thumb + d / 2, mid + d / 2, 5, c("card"))
+        self._round(thumb - d / 2, mid - d / 2, thumb + d / 2, mid + d / 2, 5, "")
+        self.create_polygon(thumb - d / 2, mid - d / 2, thumb + d / 2, mid - d / 2,
+                            thumb + d / 2, mid + d / 2, thumb - d / 2, mid + d / 2,
+                            fill="", outline=c("stroke"), width=1)
+
+    def _jump(self, event):
+        w = max(self.winfo_width(), 40)
+        d = int(14 * self.app.sx)
+        travel = max(w - d, 1)
+        frac = max(0.0, min(1.0, (event.x - d / 2) / travel))
+        self.var.set(self.lo + (self.hi - self.lo) * frac)
+        self.redraw()
+        if self.on_change:
+            self.on_change()
+
 class Slider(tk.Frame):
     def __init__(self, master, app: "App", key: str, lo: float, hi: float, step: float, value: float):
         super().__init__(master, bg=app.c("card"))
@@ -655,8 +1116,7 @@ class Slider(tk.Frame):
         self.label.pack(side="left")
         self.shown = tk.Label(row, text=f"{value:.2f}", bg=app.c("card"), fg=app.c("fg"), font=_mono(10))
         self.shown.pack(side="right")
-        self.scale = ttk.Scale(self, from_=lo, to=hi, variable=self.value, command=self._changed,
-                               orient="horizontal", style="Pav.Horizontal.TScale")
+        self.scale = PillScale(self, app, self.value, lo, hi, self._changed)
         self.scale.pack(fill="x", pady=(3, 0))
         for w in (self, row):
             app.style_widget(w, "card")
@@ -678,15 +1138,18 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.cfg = load_config()
+        if self.cfg.get("cfg_version") != 2:
+            # first run of this build: shipped defaults are English + light
+            self.cfg.update(lang="en", theme="light", cfg_version=2)
         self.page_objects = {}
         self.core_dir = self.cfg.get("cw", "")
         if self.core_dir and not os.path.isdir(self.core_dir):
             self.core_dir = ""
         self.current_page = "normals"
-        self.lang = self.cfg.get("lang", "zh")
+        self.lang = self.cfg.get("lang", "en")
         self.theme = self.cfg.get("theme", "light")
         if self.lang not in LANG:
-            self.lang = "zh"
+            self.lang = "en"
         if self.theme not in THEMES:
             self.theme = "light"
 
@@ -696,11 +1159,13 @@ class App(tk.Tk):
         self.running = False
         self.worker = None
         self.style_widgets: list[tuple] = []
+        self.file_lists: list = []
         self.cards: list = []
         self.text_bindings: list[tuple] = []
         self.lang_buttons: dict = {}
         self.theme_buttons: dict = {}
         self.switches: list = []
+        self.pill_scales: list = []
         self._tip = None
         try:
             self.texconv = ddsmod.resolve_texconv(os.environ.get("TEXCONV", "texconv.exe"))
@@ -715,7 +1180,8 @@ class App(tk.Tk):
         except Exception:
             pass
         self.sx = 1.0
-        self.geometry("1220x800")
+        self.geometry("%dx%d" % (min(int(1360 * self.sx), self.winfo_screenwidth() - 40),
+                                  min(int(820 * self.sx), self.winfo_screenheight() - 80)))
         self.minsize(int(1120 * self.sx), int(700 * self.sx))
         self.configure(bg=self.c("bg"))
         self._set_icon()
@@ -780,7 +1246,53 @@ class App(tk.Tk):
             except Exception:
                 pass
 
+    def _schedule_bg(self, _event=None):
+        if getattr(self, "_bg_job", None):
+            try:
+                self.after_cancel(self._bg_job)
+            except Exception:
+                pass
+        self._bg_job = self.after(120, self._paint_bg)
+
+    def _paint_bg(self):
+        """Faint 24 px grid behind everything, so cards read as panels."""
+        self._bg_job = None
+        canvas = getattr(self, "_bg_canvas", None)
+        if canvas is None:
+            return
+        w, h = self.winfo_width(), self.winfo_height()
+        if w < 40 or h < 40:
+            return
+        radius = 24 * self.sx
+        line = "#e2e9f3" if self.theme == "light" else "#151a21"
+        base = Image.new("RGB", (w, h), self.c("bg"))
+        draw = ImageDraw.Draw(base)
+        x = 0.0
+        while x < w:
+            draw.line([(x, 0), (x, h)], fill=line, width=1)
+            x += radius
+        y = 0.0
+        while y < h:
+            draw.line([(0, y), (w, y)], fill=line, width=1)
+            y += radius
+        canvas.delete("all")
+        self._bg_photo = ImageTk.PhotoImage(base)
+        canvas.create_image(0, 0, image=self._bg_photo, anchor="nw")
+        self.tk.call("lower", canvas._w)
+
     def _apply_theme(self):
+        note = getattr(self, "note", None)
+        if note is not None:
+            try:
+                note.configure(bg=self.c("nav"), fg=self.c("faint"))
+                self._build_note()
+            except tk.TclError:
+                pass
+        for fl in getattr(self, "file_lists", []):
+            try:
+                fl.repaint()
+            except tk.TclError:
+                pass
         for widget, bg_key, fg_key in self.style_widgets:
             opts = {}
             if bg_key:
@@ -793,6 +1305,8 @@ class App(tk.Tk):
                 pass
 
         self.configure(bg=self.c("bg"))
+        self._paint_bg()
+        self._paint_nav(self.current_page)
         for name, key in (("_nav", "nav"), ("_main", "bg")):
             pass
         try:
@@ -818,11 +1332,22 @@ class App(tk.Tk):
                 pass
         for card in getattr(self, "cards", []):
             try:
-                card.configure(bg=self.c("card"),
-                               highlightbackground=self.c("accent") if card.active
-                               else self.c("stroke"))
+                card.configure(bg=self.c("bg"))
+                card._bg.configure(bg=self.c("bg"))
                 card.body.configure(bg=self.c("card"))
+                card.head.configure(bg=self.c("card"))
                 card.title.configure(bg=self.c("card"), fg=self.c("faint"))
+                card.paint()
+            except tk.TclError:
+                pass
+        for btn in getattr(self, "pill_buttons", []):
+            try:
+                btn._draw()
+            except tk.TclError:
+                pass
+        for dot in getattr(self, "dots", []):
+            try:
+                dot.redraw()
             except tk.TclError:
                 pass
         self._retranslate_pages()
@@ -841,6 +1366,11 @@ class App(tk.Tk):
             btn.configure(bg=self.c("hover") if active else self.c("inset"),
                           fg=self.c("fg") if active else self.c("faint"),
                           text=self.t(code))
+        for sc in self.pill_scales:
+            try:
+                sc.redraw()
+            except tk.TclError:
+                pass
         for sw in self.switches:
             sw.redraw()
 
@@ -861,6 +1391,31 @@ class App(tk.Tk):
                         lightcolor=self.c("accent"), darkcolor=self.c("accent"))
         self._draw_preview()
 
+    def _build_note(self):
+        """The warning + issue link under the nav, rebuilt on every language switch."""
+        if not getattr(self, "note", None):
+            return
+        t = self.t
+        self.note.configure(state="normal")
+        self.note.delete("1.0", "end")
+        self.note.insert("end", t("note.before"))
+        self.note.insert("end", t("note.backup"), "b")
+        self.note.insert("end", t("note.mid"))
+        self.note.insert("end", t("note.test"), "b")
+        self.note.insert("end", t("note.after") + "\n\n")
+        self.note.insert("end", t("note.bug") + "\n")
+        self.note.insert("end", ISSUE_URL, "link")
+        self.note.configure(state="disabled")
+        self.note.tag_configure("b", font=_font(8, True), foreground=self.c("dim"))
+        self.note.tag_configure("link", underline=True, foreground=self.c("accent"))
+
+    def _note_click(self, event):
+        idx = self.note.index(f"@{event.x},{event.y}")
+        if "link" in self.note.tag_names(idx):
+            import webbrowser
+            webbrowser.open(ISSUE_URL)
+            return "break"
+
     def _apply_lang(self):
         self._update_titles()
         self._retranslate_pages()
@@ -876,7 +1431,7 @@ class App(tk.Tk):
             sw.options = [("light", self.t("light")), ("dark", self.t("dark"))]
             sw.redraw()
         if getattr(self, "status", None) is not None and not self.running:
-            self.status.configure(text=self.t("idle"))
+            self.set_status(self.t("idle"), "faint")
         if hasattr(self, "_fit_nav"):
             self._fit_nav()
 
@@ -896,6 +1451,7 @@ class App(tk.Tk):
         if getattr(self, "sw_lang", None) is not None:
             self.sw_lang.set_value(code)
         self._apply_lang()
+        self._build_note()
         self._apply_theme()
         self._refresh_count()
         self._save()
@@ -955,40 +1511,56 @@ class App(tk.Tk):
             self.sub.configure(wraplength=max(200, width - 6))
 
     def _fit_nav(self):
-        """Make the nav column as wide as the longest label needs."""
-        self.update_idletasks()
-        widest = 0
-        for _row, lab, _accent in self.nav_rows.values():
-            widest = max(widest, lab.winfo_reqwidth())
+        """The nav column is fixed; labels wrap inside it instead of widening it."""
         self._nav.configure(width=int(212 * self.sx))
 
+    def _nav_enter(self, page):
+        self._nav_hover = page
+        self._paint_nav(self.current_page)
+
+    def _nav_leave(self, page):
+        if self._nav_hover == page:
+            self._nav_hover = None
+        self._paint_nav(self.current_page)
+
     def _paint_nav(self, name):
-        for key, (row, lab, accent) in getattr(self, "nav_rows", {}).items():
-            active = key == name
-            bg = self.c("hover") if active else self.c("nav")
-            row.configure(bg=bg)
-            lab.configure(bg=bg, fg=self.c("fg") if active else self.c("faint"),
-                          font=_font(10, active))
-            accent.configure(bg=self.c("accent") if active else self.c("nav"))
+        """Draw every nav row as a rounded pill; the active one is filled."""
+        for page, row in getattr(self, "nav_rows", {}).items():
+            active = page == name
+            hover = (not active) and (getattr(self, "_nav_hover", None) == page)
+            row.configure(bg=self.c("nav"))
+            row.delete("all")
+            w = max(row.winfo_width(), int(180 * self.sx))
+            h = int(36 * self.sx)
+            if active or hover:
+                fill = self.c("card") if active else self.c("hover")
+                stroke = self.c("accent") if active else self.c("nav")
+                photo = _round_photo(self, w, h, int(8 * self.sx), fill, stroke)
+                row.create_image(0, 0, image=photo, anchor="nw")
+                row._photo = photo
+            if active:
+                row.create_rectangle(0, int(9 * self.sx), int(3 * self.sx), h - int(9 * self.sx),
+                                     fill=self.c("accent"), width=0)
+            fg = self.c("fg") if active else (self.c("dim") if hover else self.c("faint"))
+            row.create_text(int(16 * self.sx), h // 2, text=row._icon, anchor="w",
+                            fill=self.c("accent") if active else fg, font=_font(9))
+            row.create_text(int(34 * self.sx), h // 2, text=self.t(row._key), anchor="w",
+                            fill=fg, font=_font(10, active), width=int(148 * self.sx),
+                            justify="left")
 
     def _save(self):
         self.cfg.update(dict(lang=self.lang, theme=self.theme, cw=self.core_dir,
                              strength=float(self.sl_strength.value.get()),
                              blur=float(self.sl_blur.value.get()),
                              alpha=float(self.sl_alpha.value.get()),
-                             fmt=self.fmt.get(), resize=self.resize.get(),
-                             maxmips=self.max_mips.get()))
+                             fmt=self.fmt.get(), resize=self.resize.get().lower(),
+                             maxmips=self.max_mips.get().lower()))
         save_config(self.cfg)
 
     # ---------------------------------------------------------------- widgets
-    def _button(self, master, text, command, primary=False):
-        bg = self.c("accent") if primary else self.c("card")
-        fg = self.c("on_accent") if primary else self.c("fg")
-        btn = tk.Button(master, text=text, command=command, bg=bg, fg=fg, bd=0, relief="flat",
-                        padx=16, pady=7, font=_font(10, primary),
-                        activebackground=self.c("accent_dark") if primary else self.c("hover"),
-                        activeforeground=fg, cursor="hand2", highlightthickness=0)
-        self.style_widget(btn, "accent" if primary else "card", "on_accent" if primary else "fg")
+    def _button(self, master, text, command, primary=False, kind: str | None = None, icon: str = ""):
+        btn = PillButton(master, self, text, command,
+                         kind=kind or ("primary" if primary else "secondary"), icon=icon)
         for key, value in LANG[self.lang].items():
             if value == text:
                 self.bind_text(btn, key)
@@ -1011,7 +1583,7 @@ class App(tk.Tk):
         self._nav.pack_propagate(False)
         self._nav.pack(side="left", fill="y")
         self._nav.pack_propagate(False)
-        brand = tk.Label(self._nav, text="gtatools", bg=self.c("nav"), fg=self.c("fg"), font=_font(15, True))
+        brand = tk.Label(self._nav, text="GTA5 tools", bg=self.c("nav"), fg=self.c("fg"), font=_font(15, True))
         brand.pack(anchor="w", padx=18, pady=(20, 2))
         self.style_widget(brand, "nav", "fg")
         tag = self.bind_text(tk.Label(self._nav, text="", bg=self.c("nav"), fg=self.c("faint"),
@@ -1020,31 +1592,38 @@ class App(tk.Tk):
         self.style_widget(tag, "nav", "faint")
 
         self.nav_rows = {}
+        self._nav_hover = None
+        icons = {"normals": "◆", "ytd": "▤", "mips": "▥", "ped": "⚙"}
         for page, key in (("normals", "nav.normal"), ("ytd", "nav.ytd"), ("mips", "nav.mip"), ("ped", "nav.ped")):
-            active = page == "normals"
-            row = tk.Frame(self._nav, bg=self.c("hover") if active else self.c("nav"))
-            row.pack(fill="x", padx=10, pady=2)
-            accent = tk.Frame(row, bg=self.c("accent") if active else self.c("nav"), width=2)
-            accent.pack(side="left", fill="y")
-            lab = self.bind_text(tk.Label(row, text="", bg=self.c("hover") if active else self.c("nav"),
-                                          fg=self.c("fg") if active else self.c("faint"),
-                                          justify="left", anchor="w",
-                                          wraplength=int(170 * self.sx),
-                                          font=_font(10, active)), key)
-            lab.pack(anchor="w", padx=12, pady=8)
-            if active:
-                self.style_widget(row, "hover")
-                self.style_widget(lab, "hover", "fg")
-            else:
-                self.style_widget(row, "nav")
-                self.style_widget(lab, "nav", "faint")
+            row = tk.Canvas(self._nav, bg=self.c("nav"), highlightthickness=0, bd=0,
+                            height=int(36 * self.sx), width=int(192 * self.sx))
+            row.pack(fill="x", padx=10, pady=1)
+            row._page, row._key, row._icon = page, key, icons[page]
             row.bind("<Button-1>", lambda _e, p=page: self.show_page(p))
-            lab.bind("<Button-1>", lambda _e, p=page: self.show_page(p))
-            self.nav_rows[page] = (row, lab, accent)
+            row.bind("<Enter>", lambda _e, p=page: self._nav_enter(p))
+            row.bind("<Leave>", lambda _e, p=page: self._nav_leave(p))
+            self.nav_rows[page] = row
+        self._paint_nav("normals")
 
         ver = tk.Label(self._nav, text=f"v{VERSION}", bg=self.c("nav"), fg=self.c("faint"), font=_font(9))
         ver.pack(side="bottom", anchor="w", padx=18, pady=14)
         self.style_widget(ver, "nav", "faint")
+
+        self.note = tk.Text(self._nav, wrap="word", width=int(26 * self.sx), height=7,
+                            bg=self.c("nav"), fg=self.c("faint"), font=_font(8),
+                            relief="flat", bd=0, highlightthickness=0, padx=0, pady=0,
+                            spacing1=0, spacing3=1, cursor="arrow", takefocus=0)
+        self.note.pack(side="bottom", anchor="w", padx=18, pady=(0, 8))
+        self.note.tag_configure("b", font=_font(8, True), foreground=self.c("dim"))
+        self.note.tag_configure("link", underline=True, foreground=self.c("accent"))
+        self.note.bind("<Button-1>", self._note_click)
+        self._build_note()
+
+        self._bg_canvas = tk.Canvas(self, bg=self.c("bg"), highlightthickness=0, bd=0)
+        self._bg_canvas.place(x=0, y=0, relwidth=1, relheight=1)
+        self._bg_photo = None
+        self._bg_job = None
+        self.bind("<Configure>", self._schedule_bg, add="+")
 
         self._main = tk.Frame(self, bg=self.c("bg"))
         self._main.pack(side="left", fill="both", expand=True, padx=(18, 18), pady=(16, 16))
@@ -1098,41 +1677,67 @@ class App(tk.Tk):
         body.pack(fill="both", expand=True)
         self.style_widget(body, "bg")
 
-        params = Card(body, self, "params", help_key="help.params")
-        self.params_card = params
-        params.configure(width=int(352 * self.sx))
-        params.pack(side="right", fill="y", padx=(12, 0))
-        params.pack_propagate(False)
-        pbody = params.body
-
+        # ---- left column: files (same slim column as the other pages)
         files = Card(body, self, "files")
-        files.pack(side="left", fill="both", expand=True)
+        files.configure(width=int(290 * self.sx))
+        files.pack(side="left", fill="y")
+        files.pack_propagate(False)
+
+        tools = tk.Frame(files.head, bg=self.c("card"))
+        tools.pack(side="right")
+        self.style_widget(tools, "card")
+        self.bind_text(self._button(tools, "", self.clear_files), "clear").pack(side="right")
+        self.bind_text(self._button(tools, "", self.remove_selected), "remove").pack(side="right", padx=(0, 6))
 
         btnrow = tk.Frame(files.body, bg=self.c("card"))
         btnrow.pack(fill="x")
         self.style_widget(btnrow, "card")
         self.bind_text(self._button(btnrow, "", self.pick_files, primary=True), "add_files").pack(side="left")
         self.bind_text(self._button(btnrow, "", self.pick_folder), "add_folder").pack(side="left", padx=8)
-        self.bind_text(self._button(btnrow, "", self.remove_selected), "remove").pack(side="left")
-        self.bind_text(self._button(btnrow, "", self.clear_files), "clear").pack(side="right")
 
         wrap = tk.Frame(files.body, bg=self.c("inset"), highlightbackground=self.c("stroke"),
                         highlightthickness=1)
         wrap.pack(fill="both", expand=True, pady=(10, 0))
         self.style_widget(wrap, "inset")
-        self.listbox = tk.Listbox(wrap, bg=self.c("inset"), fg=self.c("dim"),
-                                  selectbackground=self.c("hover"), selectforeground=self.c("fg"),
-                                  highlightthickness=0, bd=0, font=_mono(9), activestyle="none")
-        sb = tk.Scrollbar(wrap, command=self.listbox.yview, bg=self.c("inset"),
-                          troughcolor=self.c("inset"), highlightthickness=0, bd=0)
-        self.listbox.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
-        self.listbox.pack(side="left", fill="both", expand=True, padx=6, pady=6)
+        self.listbox = FileList(wrap, self)
+        self.listbox.pack(fill="both", expand=True)
         self.listbox.bind("<<ListboxSelect>>", lambda _e: self._draw_preview())
         self.count_label = tk.Label(files.body, text="", bg=self.c("card"), fg=self.c("faint"),
                                     font=_font(9))
         self.count_label.pack(anchor="w", pady=(8, 0))
         self.style_widget(self.count_label, "card", "faint")
+
+        # ---- middle column: three tall preview panes
+        prev = Card(body, self, "preview")
+        prev.pack(side="left", fill="both", expand=True, padx=12)
+        self.preview_canvases = []
+        pane = prev.body
+        pane.columnconfigure(0, weight=1)
+        for row, key in enumerate(("prev.src", "prev.nrm", "prev.lit")):
+            cap = self.bind_text(tk.Label(pane, text="", bg=self.c("card"), fg=self.c("faint"),
+                                          font=_font(8, True), anchor="w"), key)
+            cap.grid(row=row * 2, column=0, sticky="ew", pady=(0, 2))
+            self.style_widget(cap, "card", "faint")
+            canvas = tk.Canvas(pane, bg=self.c("inset"), highlightthickness=1,
+                               highlightbackground=self.c("stroke"), width=10, height=20)
+            canvas.grid(row=row * 2 + 1, column=0, sticky="nsew", pady=(0, 8))
+            pane.rowconfigure(row * 2 + 1, weight=1, uniform="prev")
+            canvas.bind("<Configure>", lambda _e: self._schedule_preview())
+            self.preview_canvases.append(canvas)
+        self._preview_job = None
+        self._preview_photo = None
+
+        # ---- right column: parameters on top, log below
+        right = tk.Frame(body, bg=self.c("bg"))
+        right.configure(width=int(320 * self.sx))
+        right.pack(side="right", fill="y")
+        right.pack_propagate(False)
+        self.style_widget(right, "bg")
+
+        params = Card(right, self, "params", help_key="help.params")
+        self.params_card = params
+        params.pack(fill="x")
+        pbody = params.body
 
         cfg = self.cfg
         self.sl_strength = Slider(pbody, self, "strength", 0.5, 12.0, 0.1,
@@ -1145,18 +1750,26 @@ class App(tk.Tk):
 
         self.fmt = tk.StringVar(value=cfg.get("fmt", "DXT1"))
         self._combo(pbody, "format", self.fmt, FORMATS)
-        self.resize = tk.StringVar(value=cfg.get("resize", "keep"))
+        self.resize = tk.StringVar(value=str(cfg.get("resize", "KEEP")).upper())
         self._combo(pbody, "resize", self.resize, RESIZE_CHOICES)
-        self.max_mips = tk.StringVar(value=cfg.get("maxmips", "full"))
+        self.max_mips = tk.StringVar(value=str(cfg.get("maxmips", "FULL")).upper())
         self._combo(pbody, "maxmips", self.max_mips, MIP_CHOICES)
 
         hint = self.bind_text(tk.Label(pbody, text="", bg=self.c("card"), fg=self.c("faint"),
                                        font=_font(9), anchor="w", justify="left",
-                                       wraplength=300), "out_hint")
+                                       wraplength=272), "out_hint")
         hint.pack(fill="x", pady=(2, 0))
         self.style_widget(hint, "card", "faint")
 
-        footer = tk.Frame(self._main, bg=self.c("bg"))
+        logs = Card(right, self, "log")
+        logs.pack(fill="both", expand=True, pady=(12, 0))
+        self.log = tk.Text(logs.body, bg=self.c("inset"), fg=self.c("dim"), insertbackground=self.c("fg"),
+                           bd=0, highlightthickness=0, font=_mono(9), wrap="word", width=1, height=8)
+        self.log.pack(fill="both", expand=True)
+        self.log.configure(state="disabled")
+
+        # ---- action footer (full width, under the three columns)
+        footer = tk.Frame(main, bg=self.c("bg"))
         self.footer = footer
         footer.pack(fill="x", pady=(12, 0))
         self.style_widget(footer, "bg")
@@ -1165,47 +1778,29 @@ class App(tk.Tk):
         self.cancel_btn = self.bind_text(self._button(footer, "", self.cancel_run), "cancel")
         self.cancel_btn.pack(side="left", padx=8)
         self.cancel_btn.configure(state="disabled")
+        # the footnote block above already carries this text; keep the label but leave it empty
+        self.hint = tk.Label(footer, text="", bg=self.c("bg"), fg=self.c("faint"),
+                             font=_font(8), anchor="w")
+        self.hint.pack(side="left", padx=(14, 0))
+        self.style_widget(self.hint, "bg", "faint")
         self.progress = ttk.Progressbar(footer, style="Pav.Horizontal.TProgressbar",
                                         orient="horizontal", mode="determinate")
         self.progress.pack(side="left", fill="x", expand=True, padx=14)
+        self.status_dot = Dot(footer, self, "faint", 8)
+        self.status_dot.pack(side="right", padx=(0, 6))
         self.status = tk.Label(footer, text="", bg=self.c("bg"), fg=self.c("faint"),
                                font=_font(9), anchor="e")
         self.status.pack(side="right")
         self.style_widget(self.status, "bg", "faint")
 
-        bottom = tk.Frame(self._main, bg=self.c("bg"), height=int(250 * self.sx))
-        self.bottom = bottom
-        bottom.pack(fill="x", pady=(12, 0))
-        bottom.pack_propagate(False)
-        self.style_widget(bottom, "bg")
-
-        logs = Card(bottom, self, "log")
-        logs.configure(width=int(352 * self.sx))
-        logs.pack(side="right", fill="both", padx=(12, 0))
-        logs.pack_propagate(False)
-        self.log = tk.Text(logs.body, bg=self.c("inset"), fg=self.c("dim"), insertbackground=self.c("fg"),
-                           bd=0, highlightthickness=0, font=_mono(9), wrap="none", height=10)
-        self.log.pack(fill="both", expand=True)
-        self.log.configure(state="disabled")
-
-        prev = Card(bottom, self, "preview")
-        prev.pack(side="left", fill="both", expand=True)
-        self.preview_canvases = []
-        for key in ("prev.src", "prev.nrm", "prev.lit"):
-            col = tk.Frame(prev.body, bg=self.c("card"))
-            col.pack(side="left", fill="both", expand=True, padx=(0, 8))
-            self.style_widget(col, "card")
-            cap = self.bind_text(tk.Label(col, text="", bg=self.c("card"), fg=self.c("faint"),
-                                          font=_font(8, True), anchor="w"), key)
-            cap.pack(fill="x")
-            self.style_widget(cap, "card", "faint")
-            canvas = tk.Canvas(col, bg=self.c("inset"), highlightthickness=1,
-                               highlightbackground=self.c("stroke"), width=10, height=int(150 * self.sx))
-            canvas.pack(fill="both", expand=True, pady=(3, 0))
-            canvas.bind("<Configure>", lambda _e: self._schedule_preview())
-            self.preview_canvases.append(canvas)
-        self._preview_job = None
-        self._preview_photo = None
+    def set_status(self, text: str, kind: str = "faint"):
+        """kind: faint (idle) / dim (working) / green (ok) / danger (failed) / warning."""
+        try:
+            self.status.configure(text=text, fg=self.c(kind))
+            if hasattr(self, "status_dot"):
+                self.status_dot.redraw(kind)
+        except tk.TclError:
+            pass
 
     # ------------------------------------------------------------ page switching
     def show_page(self, name):
@@ -1226,12 +1821,6 @@ class App(tk.Tk):
                 page.pack_forget()
         self._paint_nav(name)
         self.current_page = name
-        if name == "normals":
-            self.footer.pack(fill="x", pady=(12, 0))
-            self.bottom.pack(fill="x", pady=(12, 0))
-        else:
-            self.footer.pack_forget()
-            self.bottom.pack_forget()
         self._update_titles()
         self.after_idle(self._grow_to_fit)
 
@@ -1347,7 +1936,7 @@ class App(tk.Tk):
         for canvas, tile in zip(canvases, tiles):
             cw, ch = max(canvas.winfo_width(), 80), max(canvas.winfo_height(), 60)
             img = tile.copy()
-            img.thumbnail((cw - 10, ch - 10), Image.LANCZOS)
+            img.thumbnail((cw - int(32 * self.sx), ch - int(32 * self.sx)), Image.LANCZOS)
             photo = ImageTk.PhotoImage(img)
             canvas.create_image(cw // 2, ch // 2, image=photo, anchor="center")
             self._preview_photos.append(photo)
@@ -1487,7 +2076,7 @@ class App(tk.Tk):
             self.log_line(f"err {value}")
             for line in detail.strip().splitlines()[-4:]:
                 self.log_line(f"    {line.strip()}")
-            self.status.configure(text=str(value))
+            self.set_status(str(value), "danger")
         except Exception:  # noqa: BLE001 - logging must not recurse
             pass
 
@@ -1495,10 +2084,10 @@ class App(tk.Tk):
         if self.running:
             return
         if not self.files:
-            self.status.configure(text=self.t("nothing"))
+            self.set_status(self.t("nothing"), "faint")
             return
         if not self.texconv or not os.path.isfile(self.texconv):
-            self.status.configure(text=self.t("missing_texconv"))
+            self.set_status(self.t("missing_texconv"), "danger")
             self.log_line("err texconv.exe not found: put it next to this program")
             return
         self._save()
@@ -1507,7 +2096,7 @@ class App(tk.Tk):
         self.run_btn.configure(state="disabled")
         self.cancel_btn.configure(state="normal")
         self.progress.configure(value=0, maximum=len(self.files))
-        self.status.configure(text=self.t("processing", n=0))
+        self.set_status(self.t("processing", n=0), "dim")
         first = self.files[0]
         out_dir = os.path.dirname(os.path.abspath(first))
         self.log_line(f"start: {len(self.files)} file(s) -> {out_dir}")
@@ -1515,14 +2104,14 @@ class App(tk.Tk):
                       strength=float(self.sl_strength.value.get()),
                       blur=float(self.sl_blur.value.get()),
                       alpha_w=float(self.sl_alpha.value.get()),
-                      resize=self.resize.get(),
-                      max_mips=self.max_mips.get())
+                      resize=self.resize.get().lower(),
+                      max_mips=self.max_mips.get().lower())
         self.worker = threading.Thread(target=self._work, args=(params,), daemon=True)
         self.worker.start()
 
     def cancel_run(self):
         self.cancel.set()
-        self.status.configure(text=self.t("cancelling"))
+        self.set_status(self.t("cancelling"), "warning")
 
     def _work(self, params):
         made = failed = 0
@@ -1613,7 +2202,7 @@ class App(tk.Tk):
                 if kind == "progress":
                     idx, total = payload
                     self.progress.configure(value=idx)
-                    self.status.configure(text=self.t("processing", n=idx))
+                    self.set_status(self.t("processing", n=idx), "dim")
                 elif kind == "ok":
                     src, dest = payload
                     size = ""
@@ -1628,7 +2217,8 @@ class App(tk.Tk):
                 elif kind == "done":
                     made, failed = payload
                     key = "cancelled" if self.cancel.is_set() else "done"
-                    self.status.configure(text=self.t(key, made=made, failed=failed))
+                    kind = "warning" if self.cancel.is_set() else ("green" if not failed else "danger")
+                    self.set_status(self.t(key, made=made, failed=failed), kind)
                     self.running = False
                     self.run_btn.configure(state="normal")
                     self.cancel_btn.configure(state="disabled")

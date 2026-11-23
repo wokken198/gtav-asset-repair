@@ -1,11 +1,31 @@
-# gtatools
+# GTA5 tools
 
-**Enhanced & Legacy** texture work for GTA V — a desktop app, a CLI and a DeepSeek Harness plugin.
+**Enhanced & Legacy** texture and ped work for GTA V — check mip chains, shrink `.ytd` files, audit
+`.ymt` ↔ `.ydd` pairs, and build badge normal maps. Desktop app, CLI, and a DeepSeek Harness bundle.
 
 [![tests](https://github.com/wokken198/gtav-toolkit/actions/workflows/tests.yml/badge.svg)](https://github.com/wokken198/gtav-toolkit/actions/workflows/tests.yml)
 [![release](https://img.shields.io/github/v/release/wokken198/gtav-toolkit?label=release&color=2ea44f)](https://github.com/wokken198/gtav-toolkit/releases/latest)
 
-Small, focused helpers for GTA V texture dictionaries and ped variation files. Four GUI pages, eight CLI commands, nine agent tools:
+![GTA5 tools, normal map page](docs/images/app-normals.png)
+
+**[Download the portable build](https://github.com/wokken198/gtav-toolkit/releases/latest)** — unzip,
+double-click `gtatools.exe`, done. No Python needed; the only extra is CodeWalker for the pages that
+read or write archives (the app finds it, or you point at its folder).
+
+What it saves you, measured on real packs (before → after, all with a `.bak` kept):
+
+| pass | before | after | delta |
+|---|---|---|---|
+| gen8 ped `.ytd`, 2048² textures capped to 1024 | 21.4 MB | 6.8 MB | **−68%** |
+| gen9 vehicle `.ytd`, capped to 1024 (4 files) | 3.3 → 1.4 MB each | 2.1 → 1.1 MB each | **−18% … −50%** |
+| 386 vehicles, 796 badge textures, rebuilt at 256 DXT5 with full mips | 65.4 MB | 44.1 MB | **−33%** |
+| 16-texture 2048² ped `.ytd`, rescaled to 1536 | 16.6 MB | 10.6 MB | **−36%** |
+
+Same tool, the other way round: a 4-file texture dictionary with 25 short mip chains went from
+`25 incomplete` to `0 incomplete` in one pass, and two add-on peds whose `.ymt` declared 3 and 10
+drawables for a 2-drawable `.ydd` were repaired, re-read, and verified.
+
+Four GUI pages, nine CLI commands, nine agent tools:
 
 | command | what it does |
 |---|---|
@@ -14,7 +34,7 @@ Small, focused helpers for GTA V texture dictionaries and ped variation files. F
 | `gtatools scale` | DDS rescaling that keeps pixel format and mip depth |
 | `gtatools pack` | build a `.ytd` from a CodeWalker XML + a folder of DDS |
 | `gtatools ytd list` | read-only dump of a texture dictionary (name, size, format, mips) |
-| `gtatools mips check` | flag incomplete mip chains in `.ytd` / `.dds` files |
+| `gtatools mips check\|fix` | flag short mip chains, or rebuild the archive with full chains |
 | `gtatools lite` | shrink the textures inside `.ytd` files (cap / tier / aggressive) |
 | `gtatools ped check\|fix` | audit or repair `.ymt` ↔ `.ydd` pairs, keeping a `.bak` |
 
@@ -136,6 +156,12 @@ the CLI, for the DeepSeek Harness bundle, for the market index, and for the pitf
 internals are described in [dsh-plugin/docs/DETAIL.md](dsh-plugin/docs/DETAIL.md).
 
 ## Install
+
+**Windows, no Python:** grab `gtatools-portable.zip` from the
+[latest release](https://github.com/wokken198/gtav-toolkit/releases/latest), unzip it anywhere and run
+`gtatools.exe`. Unzip the folder as a whole — the exe needs the `_internal` folder next to it.
+
+**From source:**
 
 ```bash
 pip install -e .
@@ -324,81 +350,6 @@ at that folder once and it is remembered. Archives are read and written in the s
 version they came in: RSC7 version 5 is GEN9 and is tagged that way in the list, version
 13 is Legacy, and the page warns before you compress one.
 
-## Use it as a DeepSeek Harness plugin
-
-`dsh-plugin/` is an installable DSH bundle that exposes the same eight operations as agent tools
-(`gta_badge_normal`, `gta_ymt_audit`, `gta_ytd_scale`, `gta_ytd_pack`, `gta_ytd_list`, `gta_mips_check`).
-The Python package is vendored inside, so nothing needs to be pip-installed.
-
-### Prerequisites
-
-| need | why |
-|---|---|
-| DeepSeek Harness (recent build) | the bundle manifest (`dsh.bundle.patch`) |
-| Windows | `normals` and `scale` shell out to `texconv.exe`; `pack` shells out to CodeWalker's .NET assembly |
-| Python 3.9+ with `numpy` and `Pillow` | DeepSeek Harness already ships one and the bundle probes for it — usually nothing to install |
-| `texconv.exe` (DirectXTex) | only `normals` and `scale` |
-| `CodeWalker.Core.dll` (dev48+) | only `pack` |
-
-### Install from a checkout
-
-```bash
-git clone https://github.com/wokken198/gtav-toolkit
-```
-
-Then in DeepSeek Harness: **Plugins → Add plugin**, and point it at `gtav-toolkit/dsh-plugin`.
-The bundle is named `dsh-gta-tools`.
-
-### Install from a pinned commit
-
-Pass this as the `target` of `install_bundle`, replacing `<commit>` with a commit of this repository:
-
-```text
-git+https://github.com/wokken198/gtav-toolkit.git#<commit>&path:/dsh-plugin
-```
-
-### Install from npm (only if you publish it yourself)
-
-```bash
-cd dsh-plugin
-npm publish          # or: npm publish --access public  for a scoped name
-```
-
-Users then install `dsh-gta-tools@<version>`.
-
-There is no central store to submit to: the DSH plugin market only reads index URLs a user adds under
-Settings, so a checkout, a pinned commit, or an npm package is the distribution channel.
-
-Environment variables (optional; set before launching DSH):
-
-| variable | meaning |
-|---|---|
-| `GTA_TOOLS_PYTHON` | python executable; when unset the plugin probes `python3`, `python`, then the Python bundled with DeepSeek Harness |
-| `GTA_TOOLS_TEXCONV` | path to `texconv.exe`; when unset it is looked up on `PATH` and in the working directory's parents |
-| `GTA_TOOLS_CW` | CodeWalker folder holding `CodeWalker.Core.dll`; when unset the plugin probes `GTA_TOOLS_CW`/`CODEWALKER_DIR`, common install locations, Desktop, and the working directory's parents. `gta_ytd_pack`, `gta_ytd_list` and `gta_mips_check` need it |
-
-### After installing
-
-1. The Plugins list shows **GTA V texture tools**.
-2. Smoke test from any session — ask the agent to run `gta_ytd_scale` on a folder of DDS with a small
-   target size, `gta_ytd_list` on a `.ytd`, or `gta_ymt_audit` on an exported ped `.ymt.xml`. A table
-   with no errors means the Python side is wired up.
-3. Tool names: `gta_badge_normal`, `gta_ymt_audit`, `gta_ytd_scale`, `gta_ytd_pack`, `gta_ytd_list`,
-   `gta_mips_check`.
-
-### Troubleshooting
-
-- **`ModuleNotFoundError: numpy`** — the bundle probes `python3`, `python`, then the interpreter
-  bundled with DeepSeek Harness, and skips any candidate that cannot import `numpy`/`PIL`. If a system
-  Python is picked anyway (for example before an update), point `GTA_TOOLS_PYTHON` at the bundled one,
-  or `pip install numpy pillow` for the system interpreter.
-- **`FileNotFoundError: texconv`** — put `texconv.exe` on `PATH`, in the working directory tree, or set
-  `GTA_TOOLS_TEXCONV`.
-- **`pack` cannot find CodeWalker** — it prints `codewalker: <path>` on success and exits `2` with a hint
-  when nothing was found. Set `GTA_TOOLS_CW` to the folder that holds `CodeWalker.Core.dll`.
-
-Node and CodeWalker are not bundled: `pack` shells out to CodeWalker's .NET assembly on Windows.
-
 ## Known pitfalls this repo encodes
 
 - **XML → `.ytd` round trip is lossy** for `script_rt_*` textures; always pack with `--original` when you have a
@@ -456,6 +407,13 @@ using only the normal-map maths, or wrapping the CLI in your own app are all fin
 Not fine: shipping the bundled `dsh-plugin/`, or a copy of this code, without the
 notice; or redistributing game assets (`.dds`, `.ytd`, `.ydd`, `.ymt`, brand art)
 as if they were yours — none of those are in this repository to begin with.
+
+## Optional: DeepSeek Harness bundle
+
+`dsh-plugin/` exposes the same operations as agent tools (`gta_badge_normal`, `gta_ytd_lite`,
+`gta_ped_check`, `gta_ped_fix`, …) for people who drive their work from an agent. The Python package is
+vendored inside the bundle, so nothing needs to be pip-installed. Details and environment variables:
+[dsh-plugin/docs/DETAIL.md](dsh-plugin/docs/DETAIL.md).
 
 ## License
 

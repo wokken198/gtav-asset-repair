@@ -4,6 +4,54 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] - 2026-11-24
+
+### Added
+- Stop button on the texture, mip and ped pages: the run stops after the file it is on, and
+  everything already written stays written.
+- The footer carries a standing warning - back up the originals, verify in game after an aggressive
+  pass - plus a clickable link to the issue tracker.
+
+### Fixed
+- Two pages could run at the same time and fight over the same files; a single job now owns the
+  pipeline and the second page says so instead of starting.
+- Picking a ped could not be undone: the list repainted rows by deleting and re-inserting them, which
+  dropped the selection and left the counter at zero. Rows are now updated in place against a
+  separate picked set, so tick / untick / count / button state all agree.
+- Mode cards drew a square focus ring outside their rounded background, which showed up as stray
+  colour while clicking between them.
+
+### Changed
+- The three compression modes stack the way they are meant to read: mode 1 full width on top, the
+  narrow long-edge column on the left, modes 2 and 3 stacked on the right at the same height.
+- Defaults are English + light for a first run, so a fresh install opens in the language most users
+  of the listing will read.
+- Switching language no longer rebuilds pages, so lists, reports and picked files survive it.
+
+## [0.6.2] - 2026-11-24
+
+### Changed
+- Second visual pass: a faint 24 px grid behind the content, so cards read as panels on a surface
+  instead of floating text; the nav rows are now rounded pills with an icon, a green rail and a
+  circled active state; secondary buttons rest on a pale green tint and deepen toward the accent on
+  hover; preview thumbnails keep a 32 px inner margin instead of touching the tile edge.
+- Corner radius is 8 px for cards and buttons (was 12 / 10), which squares the panels up.
+- Nav labels lost their parenthesised second line ("Normal maps (DDS)" instead of a wrapped
+  two-liner) so the English column no longer overflows the pill.
+- First visual pass, aimed at the flat "dialog box" look: cards are rounded panels with a hairline
+  border, buttons are rounded pills with hover / pressed / disabled states, the language and theme
+  pickers are real switches with a sliding knob, and the footer status is a coloured dot plus text.
+- Card backgrounds are drawn on a canvas rather than a flat frame, so the 16 px inner padding and the
+  corner radius survive resizing and both themes.
+
+### Fixed
+- `Card.paint()` called `Canvas.lower()` with no argument, which is the *canvas item* command and
+  raised `TclError: wrong # args` on every repaint (the log filled with it). The widget is now lowered
+  with the raw `lower` Tcl command instead.
+- `PillButton` recursively re-entered its own `configure()` from `_draw()` (`RecursionError`), and
+  stored its width in `self._w`, which collides with tkinter's internal widget-path attribute
+  (`invalid command name "88"`). Widths now live in `self._pw` and redraws are guarded.
+
 ## [0.6.1] - 2026-11-23
 
 ### Added

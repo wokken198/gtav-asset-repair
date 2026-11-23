@@ -105,6 +105,9 @@ def inspect(paths: Iterable[str], core_dir: str = "", ps1: str = DEFAULT_PS1,
     for path in paths:
         warning = ""
         version = rsc7_version(path)
+        # a gen8 archive read as gen9 yields plausible-looking garbage, so switch on the header
+        if version == YTD_VERSION_LEGACY and not legacy:
+            legacy = True
         if version is not None:
             want = YTD_VERSION_LEGACY if legacy else YTD_VERSION_GEN9
             if version != want:

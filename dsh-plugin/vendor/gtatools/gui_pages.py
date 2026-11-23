@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from tkinter import filedialog
 
 from . import cw, lite, ytd as ytdmod
-from .gui import Card, HelpDot, _font, _mono
+from .gui import Card, FileList, HelpDot, _font, _mono
 
 SUFFIX_TEX = (".dds", ".ytd")
 SUFFIX_YTD = (".ytd",)
@@ -113,26 +113,29 @@ class _Page:
         self.card = Card(self.left, app, self.file_title)
         self.card.pack(fill="both", expand=True)
 
+        # remove / clear live in the card header, right aligned, on every page
+        self.head_tools = tk.Frame(self.card.head, bg=app.c("card"))
+        self.head_tools.pack(side="right")
+        app.style_widget(self.head_tools, "card")
+        self.btn_clear = app._button(self.head_tools, app.t("clear"), self.clear)
+        self.btn_clear.pack(side="right")
+        app.bind_text(self.btn_clear, "clear")
+        self.btn_remove = app._button(self.head_tools, app.t("remove"), self.remove_selected)
+        self.btn_remove.pack(side="right", padx=(0, 6))
+        app.bind_text(self.btn_remove, "remove")
+
         self.btnrow = tk.Frame(self.card.body, bg=app.c("card"))
         self.btnrow.pack(fill="x")
         app.style_widget(self.btnrow, "card")
         self.btnrow2 = tk.Frame(self.card.body, bg=app.c("card"))
-        self.btnrow2.pack(fill="x", pady=(6, 0))
         app.style_widget(self.btnrow2, "card")
 
         wrap = tk.Frame(self.card.body, bg=app.c("inset"),
                         highlightbackground=app.c("stroke"), highlightthickness=1)
         wrap.pack(fill="both", expand=True, pady=(8, 0))
         app.style_widget(wrap, "inset")
-        self.listbox = tk.Listbox(wrap, bg=app.c("inset"), fg=app.c("dim"),
-                                  selectbackground=app.c("hover"),
-                                  selectforeground=app.c("fg"), highlightthickness=0,
-                                  bd=0, font=_mono(8), activestyle="none")
-        sb = ttk.Scrollbar(wrap, orient="vertical", command=self.listbox.yview,
-                           style=app.scroll_style())
-        self.listbox.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
-        self.listbox.pack(side="left", fill="both", expand=True, padx=6, pady=6)
+        self.listbox = FileList(wrap, app)
+        self.listbox.pack(side="left", fill="both", expand=True)
         self.listbox.bind("<<ListboxSelect>>", self._on_pick_file)
 
         self.note = tk.Label(self.card.body, text="", bg=app.c("card"),
@@ -147,6 +150,7 @@ class _Page:
 
         self.files = []
         self.busy = False
+        self.stop_flag = False
         self._payload = None
         self._events = queue.Queue()
 
@@ -175,6 +179,20 @@ class _Page:
         self.note.configure(text="")
         self._cleared()
 
+    def remove_selected(self):
+        picked = sorted(self.listbox.curselection(), reverse=True)
+        for index in picked:
+            self.listbox.delete(index)
+            try:
+                del self.files[index]
+            except IndexError:
+                pass
+        self.note.configure(text="")
+        self._after_remove()
+
+    def _after_remove(self):
+        self._cleared()
+
     def _cleared(self):
         pass
 
@@ -197,6 +215,12 @@ class _Page:
     def spawn(self, work):
         if self.busy:
             return
+        owner = getattr(self.app, "busy_owner", None)
+        if owner not in (None, self):
+            self.set_state(self.app.t("busy_other"))
+            return
+        self.app.busy_owner = self
+        self.stop_flag = False
         self.busy = True
         self.set_state(self.app.t("state.busy"))
 
@@ -245,6 +269,13 @@ class _Page:
         except queue.Empty:
             pass
 
+    def stop(self):
+        """Cooperative stop: finished files stay, the rest is skipped."""
+        if not self.busy:
+            return
+        self.stop_flag = True
+        self.set_state(self.app.t("stopping"))
+
     def log(self, text):
         self._events.put(("log", text))
 
@@ -252,7 +283,8 @@ class _Page:
         self._events.put(("progress", (done, total)))
 
     def _finished(self, payload=None):
-        pass
+        if getattr(self.app, "busy_owner", None) is self:
+            self.app.busy_owner = None
 
     def retranslate(self):
         self._palette()
@@ -307,7 +339,7 @@ class ModePanel(tk.Frame):
         app.style_widget(self, "bg")
 
         tier = Card(self, app, "mode.tier")
-        tier.pack(fill="x")
+        tier.pack(fill="x", pady=(0, 0))
         self.desc_tier = tk.Label(tier.body, text="", bg=app.c("card"), fg=app.c("faint"),
                                   font=_font(8), anchor="w", justify="left")
         self.desc_tier.pack(fill="x")
@@ -317,59 +349,75 @@ class ModePanel(tk.Frame):
         self._bind_card(tier, lite.MODE_TIER)
         self.card_tier = tier
 
-        row = tk.Frame(self, bg=app.c("bg"))
-        row.pack(fill="both", expand=True, pady=(8, 0))
+        # three equal blocks side by side: the row is fixed height and splits its
+        # width three ways, so the cards stay the same size whatever the window does
+        # mode 1 across the top; below it a narrow "long edge" column on the left and
+        # modes 2 + 3 stacked on the right, all four blocks the same height
+        unit = int(104 * app.sx)
+
+        tier.configure(height=unit)
+        tier.pack_propagate(False)
+
+        row = tk.Frame(self, bg=app.c("bg"), height=unit * 2 + 6)
+        row.pack(fill="x", pady=(8, 0))
+        row.pack_propagate(False)
         app.style_widget(row, "bg")
 
-        col = tk.Frame(row, bg=app.c("bg"), width=104)
-        col.pack(side="left", fill="y", padx=(0, 8))
-        col.pack_propagate(False)
-        app.style_widget(col, "bg")
-        self.limit_title = tk.Label(col, text="", bg=app.c("bg"), fg=app.c("dim"),
-                                    font=_font(9), anchor="w")
-        self.limit_title.pack(fill="x", pady=(6, 4))
-        app.style_widget(self.limit_title, "bg", "dim")
-        app.bind_text(self.limit_title, "ytd.limit")
+        card_limit = Card(row, app, "ytd.limit")
+        card_limit.configure(width=int(150 * app.sx))
+        card_limit.pack(side="left", fill="y")
+        card_limit.pack_propagate(False)
+        self.card_limit = card_limit
+        self.limit_title = card_limit.title
+        col = card_limit.body
         self.radios = []
         for value in (1024, 1536, 2048):
-            rowf = tk.Frame(col, bg=app.c("bg"), cursor="hand2")
+            rowf = tk.Frame(col, bg=app.c("card"), cursor="hand2")
             rowf.pack(fill="x", pady=2)
-            app.style_widget(rowf, "bg")
-            dot = tk.Canvas(rowf, width=14, height=14, bg=app.c("bg"), highlightthickness=0,
+            app.style_widget(rowf, "card")
+            dot = tk.Canvas(rowf, width=14, height=14, bg=app.c("card"), highlightthickness=0,
                             cursor="hand2")
             dot.pack(side="left")
-            lab = tk.Label(rowf, text=str(value), bg=app.c("bg"), fg=app.c("dim"),
+            lab = tk.Label(rowf, text=str(value), bg=app.c("card"), fg=app.c("dim"),
                            font=_font(9), anchor="w", cursor="hand2")
             lab.pack(side="left", padx=(4, 0))
-            app.style_widget(lab, "bg", "dim")
+            app.style_widget(lab, "card", "dim")
             for widget in (rowf, dot, lab):
                 widget.bind("<Button-1>", lambda _e, v=value: self.set_cap(v))
             self.radios.append((rowf, dot, lab))
-        self.limit_hint = tk.Label(col, text="", bg=app.c("bg"), fg=app.c("faint"),
-                                   font=_font(7), anchor="w", justify="left", wraplength=96)
-        self.limit_hint.pack(fill="x", pady=(4, 0))
-        app.style_widget(self.limit_hint, "bg", "faint")
+        self.limit_hint = tk.Label(col, text="", bg=app.c("card"), fg=app.c("faint"),
+                                   font=_font(7), anchor="w", justify="left", wraplength=110)
+        self.limit_hint.pack(fill="x", pady=(6, 0))
+        app.style_widget(self.limit_hint, "card", "faint")
 
         stack = tk.Frame(row, bg=app.c("bg"))
-        stack.pack(side="left", fill="both", expand=True)
+        stack.pack(side="left", fill="both", expand=True, padx=(6, 0))
         app.style_widget(stack, "bg")
 
         self.card_cap = Card(stack, app, "mode.cap")
         self.card_cap.pack(fill="both", expand=True)
+        self.card_cap.pack_propagate(False)
         self.desc_cap = tk.Label(self.card_cap.body, text="", bg=app.c("card"), fg=app.c("faint"),
                                  font=_font(8), anchor="w", justify="left")
         self.desc_cap.pack(fill="x")
         app.style_widget(self.desc_cap, "card", "faint")
-        self.desc_cap.bind("<Configure>", lambda e: self.desc_cap.configure(wraplength=max(120, e.width - 8)))
+        self.desc_cap.bind("<Configure>", lambda e: self.desc_cap.configure(wraplength=max(120, e.width - 4)))
         self._bind_card(self.card_cap, lite.MODE_CAP)
 
         self.card_agg = Card(stack, app, "mode.agg")
-        self.card_agg.pack(fill="both", expand=True, pady=(8, 0))
+        self.card_agg.pack(fill="both", expand=True, pady=(6, 0))
+        self.card_agg.pack_propagate(False)
         self.desc_agg = tk.Label(self.card_agg.body, text="", bg=app.c("card"), fg=app.c("faint"),
                                  font=_font(8), anchor="w", justify="left")
         self.desc_agg.pack(fill="x")
         app.style_widget(self.desc_agg, "card", "faint")
-        self.desc_agg.bind("<Configure>", lambda e: self.desc_agg.configure(wraplength=max(120, e.width - 8)))
+        self.desc_agg.bind("<Configure>", lambda e: self.desc_agg.configure(wraplength=max(120, e.width - 4)))
+        self._bind_card(self.card_agg, lite.MODE_AGGRESSIVE)
+        self.desc_agg = tk.Label(self.card_agg.body, text="", bg=app.c("card"), fg=app.c("faint"),
+                                 font=_font(8), anchor="w", justify="left")
+        self.desc_agg.pack(fill="x")
+        app.style_widget(self.desc_agg, "card", "faint")
+        self.desc_agg.bind("<Configure>", lambda e: self.desc_agg.configure(wraplength=max(90, e.width - 4)))
         self._bind_card(self.card_agg, lite.MODE_AGGRESSIVE)
 
         self._refresh()
@@ -405,8 +453,8 @@ class ModePanel(tk.Frame):
         self.page.mode_changed()
 
     def retranslate(self):
-        for card, key in ((self.card_tier, "mode.tier"), (self.card_cap, "mode.cap"),
-                          (self.card_agg, "mode.agg")):
+        for card, key in ((self.card_tier, "mode.tier"), (self.card_limit, "ytd.limit"),
+                          (self.card_cap, "mode.cap"), (self.card_agg, "mode.agg")):
             card.title.configure(text=self.app.t(key))
         self._refresh()
 
@@ -417,9 +465,9 @@ class ModePanel(tk.Frame):
             active = (card is self.card_tier and tier) or \
                      (card is self.card_cap and self.mode == lite.MODE_CAP) or \
                      (card is self.card_agg and self.mode == lite.MODE_AGGRESSIVE)
-            card.active = active
-            card.configure(highlightbackground=app.c("accent") if active else app.c("stroke"),
-                           highlightthickness=2 if active else 1)
+            if card.active != active:
+                card.active = active
+                card.paint()
         cap = int(self.cap.get())
         self.desc_cap.configure(text=app.t("mode.cap.desc", cap=cap))
         self.desc_agg.configure(text=app.t("mode.agg.desc", cap=cap))
@@ -504,6 +552,8 @@ class MipsPage(_Page):
         self.tree.tag_configure("missing", foreground=app.c("danger"))
         self.tree.tag_configure("ok", foreground=app.c("dim"))
         self.tree.tag_configure("fixed", foreground=app.c("green"))
+        self.tree.tag_configure("odd", background=app.c("hover"))
+        self.tree.tag_configure("even", background=app.c("inset"))
         self.tree.bind("<Button-1>", self._toggle_row)
 
         action = tk.Frame(self.report_card.body, bg=app.c("card"))
@@ -515,6 +565,8 @@ class MipsPage(_Page):
         app._button(self.actions, app.t("mips.check"), self.check, primary=True).pack(side="left")
         self.fix_btn = app._button(self.actions, app.t("mips.fix"), self.fix, primary=True)
         self.fix_btn.pack(side="left", padx=(8, 0))
+        self.stop_btn = app._button(self.actions, app.t("cancel"), self.stop)
+        self.stop_btn.pack(side="left", padx=(8, 0))
         self.summary = tk.Label(action, text="", bg=app.c("card"), fg=app.c("dim"),
                                 font=_font(9), anchor="w")
         self.summary.pack(fill="x", pady=(6, 0))
@@ -539,7 +591,6 @@ class MipsPage(_Page):
 
         app._button(self.btnrow, app.t("mips.add"), self._add_files, primary=True).pack(side="left")
         app._button(self.btnrow, app.t("mips.add_dir"), self._add_folder).pack(side="left", padx=6)
-        app._button(self.btnrow2, app.t("mips.clear"), self.clear).pack(side="right")
 
     # -- files -----------------------------------------------------------
     def pick(self):
@@ -636,7 +687,8 @@ class MipsPage(_Page):
             rowid = self.tree.insert("", "end", values=(mark, os.path.basename(path), name,
                                                         "%dx%d" % (width, height),
                                                         str(fmt).replace("D3DFMT_", ""),
-                                                        "%d/%d" % (have, need)), tags=(tag,))
+                                                        "%d/%d" % (have, need)),
+                                   tags=("odd" if len(self.tree.get_children()) % 2 else "even", tag))
             row[7] = rowid
         self._count()
 
@@ -744,6 +796,8 @@ class MipsPage(_Page):
             done = 0
             made = []
             for index, (path, names) in enumerate(files, start=1):
+                if self.stop_flag:
+                    break
                 self.log("fixing %s (%d texture(s))" % (os.path.basename(path), len(names)))
                 out, report = lite.fix_mips(
                     path, core_dir=core, texconv=texconv,
@@ -820,7 +874,7 @@ class YtdPage(_Page):
         app.style_widget(row, "card")
         self.cw_var = tk.StringVar(value=app.core_dir or "")
         self.cw_entry = tk.Entry(row, textvariable=self.cw_var, bg=app.c("inset"), fg=app.c("fg"),
-                                 insertbackground=app.c("fg"), relief="flat", bd=0,
+                                 insertbackground=app.c("fg"), relief="flat", bd=0, width=30,
                                  highlightthickness=1, highlightbackground=app.c("stroke"),
                                  font=_font(8))
         self.cw_entry.pack(side="left", fill="x", expand=True, ipady=4)
@@ -843,7 +897,7 @@ class YtdPage(_Page):
         self.text = tk.Text(self.report_card.body, bg=app.c("inset"), fg=app.c("dim"),
                             insertbackground=app.c("fg"), relief="flat", bd=0,
                             highlightthickness=1, highlightbackground=app.c("stroke"),
-                            font=_mono(8), wrap="none", height=6)
+                            font=_mono(8), wrap="word", width=1, height=6)
         self.text.pack(fill="both", expand=True)
         app.style_widget(self.text, "inset", "dim")
 
@@ -864,14 +918,15 @@ class YtdPage(_Page):
         app.style_widget(self.state, "card", "faint")
 
         buttons = tk.Frame(action, bg=app.c("card"))
-        buttons.pack(fill="x", pady=(8, 0))
+        buttons.pack(fill="x", pady=(8, 0), before=self.summary)
         app.style_widget(buttons, "card")
         app._button(buttons, app.t("ytd.plan"), self.plan).pack(side="left")
         app._button(buttons, app.t("ytd.start"), self.compress, primary=True).pack(side="left", padx=8)
+        self.stop_btn = app._button(buttons, app.t("cancel"), self.stop)
+        self.stop_btn.pack(side="left")
 
         app._button(self.btnrow, app.t("ytd.add"), self._add_files, primary=True).pack(side="left")
         app._button(self.btnrow, app.t("ytd.add_dir"), self._add_folder).pack(side="left", padx=6)
-        app._button(self.btnrow2, app.t("ytd.clear"), self.clear).pack(side="right")
 
         self._sync_cw()
 
@@ -975,6 +1030,8 @@ class YtdPage(_Page):
             raw = ("A8R8G8B8", "B8G8R8A8", "A8B8G8R8", "X8R8G8B8", "R8G8B8A8")
             keep = ("spec", "gloss", "dirt", "decal", "mask", "script_rt")
             for index, path in enumerate(files, start=1):
+                if self.stop_flag:
+                    break
                 textures = (self.meta.get(path) or {}).get("textures") or []
                 if not textures:
                     self.log("err %s: no texture info" % os.path.basename(path))
@@ -1044,6 +1101,8 @@ class YtdPage(_Page):
             mem_before = mem_after = 0.0
             done = failed = skipped = 0
             for index, path in enumerate(files, start=1):
+                if self.stop_flag:
+                    break
                 name = os.path.basename(path)
                 try:
                     size_before = os.path.getsize(path)
@@ -1179,9 +1238,12 @@ class PedPage(_Page):
         self.actions.pack(fill="x")
         app.style_widget(self.actions, "card")
         self.btn_check = app._button(self.actions, app.t("ped.check"), self.check_all, primary=True)
+        self.stop_btn = app._button(self.actions, app.t("cancel"), self.stop)
         self.btn_check.pack(side="left")
+        app.bind_text(self.btn_check, "ped.check")
         self.btn_fix = app._button(self.actions, app.t("ped.fix"), self.fix_all)
         self.btn_fix.pack(side="left", padx=(8, 0))
+        app.bind_text(self.btn_fix, "ped.fix")
         self.pick_label = tk.Label(self.actions, text="", bg=app.c("card"),
                                    fg=app.c("faint"), font=_font(8), anchor="e")
         self.pick_label.pack(side="right")
@@ -1200,7 +1262,6 @@ class PedPage(_Page):
         app.style_widget(self.state, "card", "faint")
 
         app._button(self.btnrow, app.t("ped.add"), self._add_folder, primary=True).pack(side="left")
-        app._button(self.btnrow2, app.t("ped.clear"), self.clear).pack(side="right")
         self.set_state(app.t("ped.pick"))
 
     # -- file handling ---------------------------------------------------
@@ -1213,6 +1274,25 @@ class PedPage(_Page):
         folder = filedialog.askdirectory(title=self.app.t("ped.add"))
         return [] if not folder else [folder]
 
+    def retranslate(self):
+        super().retranslate()
+        self._refresh_pick()
+        if not self.listbox.size():
+            self.set_state(self.app.t("ped.pick"))
+
+    def remove_selected(self):
+        picked = sorted(self.listbox.curselection(), reverse=True)
+        for index in picked:
+            self.listbox.delete(index)
+            self.picked = set()
+            for store in (self.pairs, self.status):
+                try:
+                    del store[index]
+                except IndexError:
+                    pass
+        self._refresh_pick()
+        self.set_state("")
+
     def _add_folder(self):
         folders = self.pick_dir()
         if not folders:
@@ -1224,6 +1304,7 @@ class PedPage(_Page):
         self.folder = folders[0]
         self.pairs = found
         self.status = [None] * len(found)
+        self.picked = set()
         self.listbox.delete(0, "end")
         for stem, _ydd, _ymt in found:
             self.listbox.insert("end", "\u2610  " + stem)
@@ -1235,6 +1316,7 @@ class PedPage(_Page):
     def clear(self):
         self.pairs = []
         self.status = []
+        self.picked = set()
         self.listbox.delete(0, "end")
         self.note.configure(text="")
         self.text.delete("1.0", "end")
@@ -1250,13 +1332,16 @@ class PedPage(_Page):
         mark = {"ok": "\u2713", "bad": "\u2611", None: "\u2610"}[state]
         color = {"ok": self.app.c("fg"), "bad": self.app.c("danger")}.get(state, self.app.c("faint"))
         text = "%s  %s" % (mark, self.pairs[index][0])
-        self.listbox.delete(index)
-        self.listbox.insert(index, text)
-        self.listbox.itemconfigure(index, foreground=color)
-        if state == "bad":
-            self.listbox.selection_set(index)
+        if hasattr(self.listbox, "set_row"):
+            self.listbox.set_row(index, text, color)
         else:
-            self.listbox.selection_clear(index)
+            self.listbox.delete(index)
+            self.listbox.insert(index, text)
+            self.listbox.itemconfigure(index, foreground=color)
+        if state == "bad":
+            self.picked.add(index)
+        else:
+            self.picked.discard(index)
         self._refresh_pick()
 
     def _toggle_row(self, event):
@@ -1264,21 +1349,25 @@ class PedPage(_Page):
         index = self.listbox.nearest(event.y)
         if index < 0 or index >= len(self.pairs) or self.status[index] != "bad":
             return None
-        if index in self.listbox.curselection():
-            self.listbox.selection_clear(index)
+        if index in self.picked:
+            self.picked.discard(index)
             glyph, color = "\u2610", self.app.c("danger")
         else:
-            self.listbox.selection_set(index)
+            self.picked.add(index)
             glyph, color = "\u2611", self.app.c("danger")
+        self.listbox.selection_clear(0, "end")
         name = self.pairs[index][0]
-        self.listbox.delete(index)
-        self.listbox.insert(index, "%s  %s" % (glyph, name))
-        self.listbox.itemconfigure(index, foreground=color)
+        if hasattr(self.listbox, "set_row"):
+            self.listbox.set_row(index, "%s  %s" % (glyph, name), color)
+        else:
+            self.listbox.delete(index)
+            self.listbox.insert(index, "%s  %s" % (glyph, name))
+            self.listbox.itemconfigure(index, foreground=color)
         self._refresh_pick()
         return "break"
 
     def _refresh_pick(self):
-        picked = len(self.listbox.curselection())
+        picked = len(self.picked)
         try:
             self.pick_label.configure(text=self.app.t("ped.picked").format(n=picked))
             self.btn_fix.configure(state=("normal" if picked else "disabled"))
@@ -1315,6 +1404,9 @@ class PedPage(_Page):
         def work():
             ok = bad = fixed = 0
             for count, (index, stem, ydd, ymt) in enumerate(jobs, 1):
+                if self.stop_flag:
+                    self._events.put(("report", self.app.t("stopping")))
+                    break
                 self.tick(count - 1, len(jobs))
                 self.log(self.app.t({"fix": "ped.fixing", "align": "ped.aligning"}.get(kind, "ped.checking")).format(name=stem))
                 try:
@@ -1392,7 +1484,7 @@ class PedPage(_Page):
         if not self._core():
             self.set_state(self.app.t("ytd.cw_missing"))
             return
-        picked = set(self.listbox.curselection())
+        picked = set(self.picked)
         jobs = [(i, stem, ydd, ymt) for i, (stem, ydd, ymt) in enumerate(self.pairs)
                 if i in picked and self.status[i] == "bad"]
         if not jobs:

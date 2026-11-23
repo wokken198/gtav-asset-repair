@@ -364,6 +364,48 @@ def _ped_targets(paths) -> list[tuple[str, str, str]]:
     return unique
 
 
+def cmd_mips_fix(args) -> int:
+    paths = []
+    for p in args.paths:
+        if os.path.isdir(p):
+            paths.extend(sorted(glob.glob(os.path.join(p, "**", "*.ytd"), recursive=True)))
+        else:
+            paths.append(p)
+    if not paths:
+        print("no .ytd files given", file=sys.stderr)
+        return 2
+
+    out_dir = ""
+    single_out = ""
+    if args.out:
+        if len(paths) == 1 and not os.path.isdir(args.out):
+            single_out = args.out
+        else:
+            out_dir = args.out
+            os.makedirs(out_dir, exist_ok=True)
+
+    done = failed = 0
+    for path in paths:
+        out_path = ""
+        if single_out:
+            out_path = single_out
+        elif out_dir:
+            out_path = os.path.join(out_dir, os.path.basename(path))
+        try:
+            final, report = lite.fix_mips(path, out_path=out_path, core_dir=args.core_dir,
+                                          texconv=args.texconv, inplace=args.inplace)
+        except Exception as exc:
+            failed += 1
+            print("err  %s: %s" % (os.path.basename(path), exc))
+            continue
+        done += 1
+        changed = len([1 for line in report.splitlines() if line.strip()])
+        print("ok   %s -> %s (%d texture(s) rebuilt)" % (os.path.basename(path),
+                                                         os.path.basename(final), changed))
+    print("%d rebuilt, %d failed" % (done, failed))
+    return 0 if failed == 0 else 2
+
+
 def cmd_ped_check(args) -> int:
     from . import ped as pedmod
     core = args.core_dir or cw.find_corewalker()
@@ -533,6 +575,14 @@ def build_parser() -> argparse.ArgumentParser:
     mc.add_argument("--core-dir", default="", help="CodeWalker folder; auto-detected when omitted")
     mc.add_argument("--ps1", default=ytdmod.DEFAULT_PS1, help="the ytd_inspect.ps1 bridge script")
     mc.set_defaults(func=cmd_mips_check)
+
+    mf = msub.add_parser("fix", help="rebuild the dictionary with full mip chains (keeps a .bak with --inplace)")
+    mf.add_argument("paths", nargs="+", help=".ytd files or folders")
+    mf.add_argument("--out", default="", help="output .ytd, or a folder for several inputs")
+    mf.add_argument("--inplace", action="store_true", help="overwrite each input, keeping <name>.ytd.bak")
+    mf.add_argument("--core-dir", default="", help="CodeWalker folder; auto-detected when omitted")
+    mf.add_argument("--texconv", default="", help="path to texconv.exe")
+    mf.set_defaults(func=cmd_mips_fix)
 
     p_ = sub.add_parser("ped", parents=[common], help="audit or repair ped .ymt against its .ydd")
     psub = p_.add_subparsers(dest="ped_cmd", required=True)
