@@ -13,3 +13,6 @@ build/
 dist/
 *.spec
 .gtatools_tmp/
+
+# test scratch
+tests/_tmp/
