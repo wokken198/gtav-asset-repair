@@ -56,12 +56,12 @@
       },
       "versions": [
         {
-          "version": "0.6.1",
-          "publishTimestamp": 1795446491,
+          "version": "0.6.3",
+          "publishTimestamp": 1795468518,
           "source": {
             "type": "git",
             "url": "https://github.com/wokken198/gtav-asset-repair",
-            "commit": "6690342e2e5871836bd11abcaab787404a794d",
+            "commit": "c3d230eb672d9d72ac1e5abfde40c5d0c797b53d",
             "path": "dsh-plugin"
           },
           "engines": {}
