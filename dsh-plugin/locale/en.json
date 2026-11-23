@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "GTA V texture tools",
-    "description": "Badge normal maps, ped variation audits and YTD packing for GTA V, exposed as agent tools.",
+    "description": "Nine tools for GTA V Enhanced & Legacy assets: badge normal maps, YTD shrink/mip fill/list, prop-free pack, and ped YMT check/repair.",
     "detail": "docs/DETAIL.md"
   }
 }

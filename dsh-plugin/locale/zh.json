@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "GTA V 贴图工具",
-    "description": "车标法线、ped 变体审计与 YTD 打包，作为 agent 工具使用。",
+    "description": "九个工具，覆盖 GTA V 增强版与旧版资产：车标法线、YTD 压缩/补 mip/列表、打包，以及 PED YMT 校验与修复。",
     "detail": "docs/DETAIL.md"
   }
 }
