@@ -166,7 +166,7 @@ internals are described in [dsh-plugin/docs/DETAIL.md](dsh-plugin/docs/DETAIL.md
 
 ## Install
 
-**Windows, no Python:** grab `gtav_asset_repair-portable.zip` from the
+**Windows, no Python:** grab `gtav-asset-repair-portable.zip` from the
 [latest release](https://github.com/wokken198/gtav-asset-repair/releases/latest), unzip it anywhere and run
 `gtav-asset-repair.exe`. Unzip the folder as a whole — the exe needs the `_internal` folder next to it.
 
@@ -405,8 +405,7 @@ is meant to be the engine for it.
 If you reuse the code, **keep the copyright notice and say where it came from**,
 e.g.:
 
-> Badge handling based on [gtav-asset-repair](https://github.com/wokken198/gtav-asset-repair)
-> by wokken198, MIT licensed.
+> Badge normal mapping and YTD tooling by wokken198, MIT licensed — https://github.com/wokken198/gtav-asset-repair
 
 That attribution requirement is the one thing the MIT license already asks for
 (keep the notice); the link back is courtesy, and it is how people find the
