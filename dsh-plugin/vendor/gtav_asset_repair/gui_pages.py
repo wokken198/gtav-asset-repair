@@ -264,6 +264,10 @@ class _Page:
                     self._payload = (kind, payload)
                 elif kind == "done":
                     self.busy = False
+                    # Release the cross-page lock here, not in _finished(): subclasses
+                    # override _finished() and would otherwise keep the app locked.
+                    if getattr(self.app, "busy_owner", None) is self:
+                        self.app.busy_owner = None
                     payload, self._payload = getattr(self, "_payload", None), None
                     self._finished(payload)
         except queue.Empty:
@@ -614,7 +618,7 @@ class MipsPage(_Page):
         self.bar = tk.Frame(self.progress, bg=app.c("accent"), height=6)
         self.bar.place(x=0, y=0, relwidth=0.0, relheight=1.0)
         self.state = tk.Label(action, text="", bg=app.c("card"), fg=app.c("faint"),
-                              font=_font(8), anchor="w")
+                              font=_font(8), anchor="w", justify="left")
         self.state.pack(fill="x", pady=(4, 0))
         app.style_widget(self.state, "card", "faint")
 
@@ -942,7 +946,7 @@ class YtdPage(_Page):
         self.bar = tk.Frame(self.progress, bg=app.c("accent"), height=6)
         self.bar.place(x=0, y=0, relwidth=0.0, relheight=1.0)
         self.state = tk.Label(action, text="", bg=app.c("card"), fg=app.c("faint"),
-                              font=_font(8), anchor="w")
+                              font=_font(8), anchor="w", justify="left")
         self.state.pack(fill="x", pady=(4, 0))
         app.style_widget(self.state, "card", "faint")
 
@@ -1044,7 +1048,10 @@ class YtdPage(_Page):
         return mode, cap, self.app.core_dir, self.app.texconv
 
     def plan(self):
-        if self.busy or not self.files:
+        if self.busy:
+            return
+        if not self.files:
+            self.set_state(self.app.t("ytd.pick"))
             return
         mode, cap, core, texconv = self._params()
         files = list(self.files)
@@ -1115,7 +1122,10 @@ class YtdPage(_Page):
         self.set_bar(1, 1)
 
     def compress(self):
-        if self.busy or not self.files:
+        if self.busy:
+            return
+        if not self.files:
+            self.set_state(self.app.t("ytd.pick"))
             return
         mode, cap, core, texconv = self._params()
         if not _core_ok(core):
@@ -1286,7 +1296,7 @@ class PedPage(_Page):
         self.bar = tk.Frame(self.progress, bg=app.c("accent"), height=6)
         self.bar.place(x=0, y=0, relwidth=0.0, relheight=1.0)
         self.state = tk.Label(action, text="", bg=app.c("card"), fg=app.c("faint"),
-                              font=_font(8), anchor="w")
+                              font=_font(8), anchor="w", justify="left")
         self.state.pack(fill="x", pady=(4, 0))
         app.style_widget(self.state, "card", "faint")
 
@@ -1422,6 +1432,12 @@ class PedPage(_Page):
         return folder if _core_ok(folder) else ""
 
     def _run(self, jobs, kind):
+        owner = getattr(self.app, "busy_owner", None)
+        if owner not in (None, self):
+            self.set_state(self.app.t("busy_other"))
+            return
+        self.app.busy_owner = self
+        self.stop_flag = False
         self.busy = True
         self.set_state(self.app.t("state.busy"))
         title = self.app.t("ped.hdr.fix" if kind in ("fix", "align", "auto") else "ped.hdr.check")
@@ -1557,6 +1573,10 @@ class PedPage(_Page):
                     self._payload = (kind, payload)
                 elif kind == "done":
                     self.busy = False
+                    # Release the cross-page lock here, not in _finished(): subclasses
+                    # override _finished() and would otherwise keep the app locked.
+                    if getattr(self.app, "busy_owner", None) is self:
+                        self.app.busy_owner = None
                     payload, self._payload = getattr(self, "_payload", None), None
                     self._finished(payload)
         except queue.Empty:

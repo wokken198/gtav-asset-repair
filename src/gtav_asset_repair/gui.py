@@ -95,7 +95,10 @@ LANG = {
         "ytd.cw_browse": "Browse",
         "ytd.cw_detect": "Detect",
         "ytd.cw_ok": "found",
-        "ytd.cw_missing": "not set",
+        "ytd.cw_missing": "CodeWalker folder not set. Required for: Compress YTD, Fix MIP Chains, "
+                          "Check/Fix Ped.\nYTD and MIP Analyze still work without it. "
+                          "Set the folder on the Textures page.",
+        "ytd.pick": "add a .ytd file first",
         "ytd.files": "YTD files",
         "ytd.add": "Add YTD",
         "ytd.clear": "Clear",
@@ -238,7 +241,9 @@ LANG = {
         "ytd.cw_browse": "浏览",
         "ytd.cw_detect": "自动探测",
         "ytd.cw_ok": "已找到",
-        "ytd.cw_missing": "未设置",
+        "ytd.cw_missing": "未设置 CodeWalker 文件夹。压缩 YTD、修复 MIP 链、PED 检查/修复需要它。\n"
+                          "YTD 和 MIP 分析不受影响。请在「纹理」页设置文件夹。",
+        "ytd.pick": "请先添加 .ytd 文件",
         "ytd.files": "YTD 文件",
         "ytd.add": "添加 YTD",
         "ytd.clear": "清空",
@@ -1160,6 +1165,8 @@ class App(tk.Tk):
         self.worker = None
         self.style_widgets: list[tuple] = []
         self.file_lists: list = []
+        # Which page currently owns the one-job-at-a-time lock (None = free).
+        self.busy_owner = None
         self.cards: list = []
         self.text_bindings: list[tuple] = []
         self.lang_buttons: dict = {}
