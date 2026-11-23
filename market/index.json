@@ -61,7 +61,7 @@
           "source": {
             "type": "git",
             "url": "https://github.com/wokken198/gtav-toolkit",
-            "commit": "d27586187bca292d8787719f277b67b54f4c62ee",
+            "commit": "5f9014b7c8fcf9adff2e7d61e9ba22510eda128e",
             "path": "dsh-plugin"
           },
           "engines": {}
