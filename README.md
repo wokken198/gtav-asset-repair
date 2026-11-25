@@ -15,13 +15,13 @@ installed: reading, compressing, MIP repair, ped repair and RPF defragging all r
 
 ## What it does
 
-| page | job | CodeWalker |
-|---|---|---|
-| **Normal maps (DDS)** | badge diffuse → tangent-space normal map, with strength / blur / alpha weight | not needed |
-| **Textures (YTD)** | shrink the textures inside a `.ytd`, keep a `.bak` | not needed |
-| **Mip check (YTD/DDS)** | report short mip chains, then rebuild the archive with full ones | not needed |
-| **Ped repair (YMT)** | check `.ymt` against its `.ydd`, correct the drift | not needed |
-| **Defrag (RPF)** | rewrite an `.rpf` so its payload is contiguous again, reclaiming the space left by replaced files | not needed |
+| page | job |
+|---|---|
+| **Normal maps (DDS)** | badge diffuse → tangent-space normal map, with strength / blur / alpha weight |
+| **Textures (YTD)** | shrink the textures inside a `.ytd`, keep a `.bak` |
+| **Mip check (YTD/DDS)** | report short mip chains, then rebuild the archive with full ones |
+| **Ped repair (YMT)** | check `.ymt` against its `.ydd`, correct the drift |
+| **Defrag (RPF)** | rewrite an `.rpf` so its payload is contiguous again, reclaiming the space left by replaced files |
 
 Compression only frees memory; the archive on disk keeps its old size until it is defragged, which is what
 the **Defrag (RPF)** button and `rpf defrag` do: they read the archive, lay the payload out contiguously,
@@ -51,8 +51,8 @@ Mip work goes the other way: a 4-file dictionary with 25 short chains went from 
 
 > **VRAM vs disk.** The VRAM numbers are yours the moment a file is rewritten. The *disk* numbers only
 > become real after the archive holding those files is repacked — an `.rpf` keeps the old bytes as empty
-> space until it is defragmented (OpenIV: defrag the inner `.rpf`, drop it back, then defrag the outer one).
-> Nothing here touches archives, on purpose.
+> space until it is defragmented. The **Defrag (RPF)** page does that (OpenIV does the same thing), and
+> it is the only place in this tool that rewrites an archive.
 
 | Analyze — estimate only, nothing written | Compress — 9 written, 1 skipped |
 |---|---|
@@ -60,7 +60,7 @@ Mip work goes the other way: a 4-file dictionary with 25 short chains went from 
 
 ## Install
 
-**Windows, no Python:** download `gtav-asset-repair-portable.zip` from the
+**Windows, no Python:** download `gtav-asset-repair-0.7.1.zip` from the
 [latest release](https://github.com/wokken198/gtav-asset-repair/releases/latest), unzip the **whole folder**
 (the exe needs `_internal/` next to it) and run `gtav-asset-repair.exe`.
 
@@ -70,9 +70,10 @@ Mip work goes the other way: a 4-file dictionary with 25 short chains went from 
 pip install -e .
 ```
 
-Python 3.9+, `numpy`, `Pillow`. Two optional bits, each needed only by the commands that use them:
+Python 3.11+, `numpy`, `Pillow`. One optional extra:
 
-- **texconv.exe** (DirectXTex) — `normals`, `scale`; on `PATH`, next to the exe, or pass `--texconv`.
+- **texconv.exe** (DirectXTex) — only `normals` and `scale` use it; on `PATH`, next to the exe, or pass
+  `--texconv`. The portable build already ships it.
 
 ## Quick start
 
@@ -86,18 +87,19 @@ The footer link and the note in the corner are there because step 5 is not optio
 
 ## CLI
 
-Eight subcommands, all with the same `--json`, `--work` and error conventions:
+Nine subcommands, all with the same `--json`, `--work` and error conventions:
 
 | command | what it does |
 |---|---|
 | `gtav-asset-repair normals` | badge diffuse map → tangent-space normal map (DDS) + contact sheet |
 | `gtav-asset-repair audit` | CPedVariationInfo (`.ymt`) check against vanilla's rules |
 | `gtav-asset-repair scale` | DDS rescaling that keeps pixel format and mip depth |
-| `gtav-asset-repair pack` | build a `.ytd` from a CodeWalker XML + a folder of DDS |
+| `gtav-asset-repair pack` | build a `.ytd` from a CodeWalker-style XML + a folder of DDS, restoring gen9 header bits from `--original` |
 | `gtav-asset-repair ytd list` | read-only dump: name, size, format, mips per texture |
 | `gtav-asset-repair mips check\|fix` | flag short mip chains, or rebuild the archive with full chains |
 | `gtav-asset-repair lite` | shrink the textures inside `.ytd` files (cap / tier / agg) |
 | `gtav-asset-repair ped check\|fix` | audit or repair `.ymt` ↔ `.ydd` pairs, keeping a `.bak` |
+| `gtav-asset-repair rpf defrag` | rebuild an `.rpf` contiguously; `--dry-run` reports what it would reclaim |
 
 ```bash
 # normal map next to the source
@@ -175,7 +177,7 @@ so archives that carry encrypted children are left alone rather than broken.
 ## Development
 
 ```bash
-python -m unittest discover -s tests -v     # 45 tests
+python -m unittest discover -s tests -v     # 79 tests
 ```
 
 ```bash
@@ -183,13 +185,13 @@ powershell -ExecutionPolicy Bypass -File packaging/build_win.ps1   # exe + porta
 ```
 
 ```
-src/gtav_asset_repair/   cli.py, dds.py, normals.py, ymt.py, ped.py, cw.py, ytd.py, lite.py, gui.py, gui_pages.py
-tests/                   test_core.py, test_lite.py, test_gui.py
-resources/               PowerShell helpers (ytd xml export/pack)
+src/gtav_asset_repair/   cli.py, dds.py, normals.py, ymt.py, ped.py, ytd.py, ytd_write.py, lite.py,
+                        rpf.py, rpf7.py, settings.py, gui.py, gui_pages.py, vendor/ (fivefury, trimesh)
+tests/                   test_core.py, test_lite.py, test_ped.py, test_gui.py
 packaging/               PyInstaller entry point, build script, portable README
-dsh-plugin/              DeepSeek Harness bundle (nine agent tools)
+dsh-plugin/              DeepSeek Harness bundle (the same operations as agent tools)
 market/                  DSH market index entry
-docs/                    README.md, pitfalls.md, why-mips.md, ped-ymt-rules.md, images/
+docs/                    pitfalls.md, why-mips.md, ped-ymt-rules.md, fivefury-probe.md, images/
 ```
 
 ## Building on this
@@ -211,12 +213,13 @@ pip-installed. Details: [dsh-plugin/docs/DETAIL.md](dsh-plugin/docs/DETAIL.md).
 
 **gtav-asset-repair** 是一个面向 **GTA V（增强版 gen9 / 旧版 gen8）** 的贴图与 PED 处理工具，桌面版和命令行都有。
 
-四件事：**车标法线生成**、**YTD 贴图压缩**（降分辨率、降显存）、**Mip 链检查与补全**（消除远处闪烁）、
-**PED 的 `.ymt` / `.ydd` 校验与修复**（解决模型错位、LOD 异常、出生崩溃）。
+五件事：**车标法线生成**、**YTD 贴图压缩**（降分辨率、降显存）、**Mip 链检查与补全**（消除远处闪烁）、
+**PED 的 `.ymt` / `.ydd` 校验与修复**（解决模型错位、LOD 异常、出生崩溃）、**RPF 碎片整理**
+（把压缩省下的空间真正还给硬盘）。
 
 特点：处理前先用 `分析` 给出显存与体积预估；所有原地写入都留 `.bak`；压缩不会偷偷改格式（只有「激进」模式才换，
 且跳过 `script_rt_*`、法线、spec 类贴图）；两个世代的文件可以混在一批里处理，各自按原版本写回。
-它不修复模型本体，也不替代 OpenIV / CodeWalker / Sollumz。
+它不修复模型本体，也不替代 OpenIV / Sollumz；RPF 整理这一项和 OpenIV 的功能重叠。
 
 ## License
 

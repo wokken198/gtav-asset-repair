@@ -7,7 +7,7 @@ name = "gtav-asset-repair"
 version = "0.7.1"
 description = "Small GTA V asset helpers: badge normal maps, CPedVariationInfo auditing, DDS rescaling, YTD packing"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = ["numpy", "Pillow"]
 keywords = ["gta5", "modding", "dds", "normal-map", "ytd", "rpf", "codewalker"]

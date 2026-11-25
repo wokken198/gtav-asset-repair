@@ -1,6 +1,66 @@
 gtav-asset-repair 0.7.1
 ======================
 
+Texture and ped repair for GTA V.
+Pure-Python core: no Python install, no CodeWalker, no OpenIV, no .NET.
+
+
+Quick start
+-----------
+
+Double-click gtav-asset-repair.exe. There is no installer and nothing is written
+to the registry. The unzipped folder can live anywhere (non-ASCII paths are
+fine), but keep the structure intact — the exe needs the _internal folder next
+to it.
+
+
+Five pages
+----------
+
+1. Normal maps (DDS)
+   Turn a badge diffuse into a tangent-space normal map. Strength, blur and
+   alpha weight are adjustable.
+
+2. Textures (YTD)
+   Batch-shrink the long edge of the textures inside .ytd files
+   (1024 / 1536 / 2048), optionally rebuilding full mip chains as well.
+
+3. Mip check (DDS/YTD)
+   Find textures whose mip chain is too short and rebuild them on request.
+   Less shimmer at a distance.
+
+4. Ped repair (YMT)
+   Check that the .ymt declares the drawables the .ydd actually has. Fixes blank
+   wardrobe entries and crashes on spawn.
+
+5. Defrag (RPF)
+   Rebuild an RPF archive: lay the resources out contiguously, rewrite the
+   directory table, and hand the space left by deleted files back to the disk.
+   Textures are not re-compressed and resource contents are untouched.
+
+
+Safety
+------
+
+* .bak backups are kept by default. Test in game first, delete them after.
+* Back up the original files before the first run on a given pack.
+* RPFs with encrypted children (common in vanilla dlc) are skipped
+  automatically and counted in the report — they are never half-written.
+* Large archives (3 GB and up) take tens of seconds; the progress bar shows it.
+
+
+Feedback
+--------
+
+https://github.com/wokken198/gtav-asset-repair/issues
+
+
+================================================================
+
+
+gtav-asset-repair 0.7.1
+======================
+
 GTA V 的贴图与 PED 修复工具。
 纯 Python 内核：不需要安装 Python，不需要 CodeWalker，不需要 OpenIV，不需要 .NET。
 
@@ -8,8 +68,9 @@ GTA V 的贴图与 PED 修复工具。
 快速开始
 --------
 
-双击 gtav-asset-repair.exe 即可，没有安装程序，也不用放注册表。
-解压后的整个文件夹可以放在任意位置（含中文路径），但请保持文件夹结构完整。
+双击 gtav-asset-repair.exe 即可，没有安装程序，也不用写注册表。
+解压后的整个文件夹可以放在任意位置（含中文路径），但请保持文件夹结构完整
+（exe 需要旁边的 _internal 目录）。
 
 
 五个功能
