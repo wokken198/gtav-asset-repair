@@ -1,0 +1,897 @@
+from __future__ import annotations
+
+import dataclasses
+from collections.abc import Sequence
+from pathlib import Path
+
+from ..binary import align
+from ..bounds import (
+    Bound,
+    calculate_bound_ref_counts,
+    gen9_bound_file_vft,
+    write_bound_resource,
+)
+from ..common import atomic_write_bytes
+from ..resource import (
+    ResourceBlockSpan,
+    ResourceSections,
+    ResourceWriter,
+    build_rsc7,
+    get_resource_total_page_count,
+    layout_resource_sections,
+)
+from ..vector import Vector3, Vector4
+from ..ydr import Ydr, YdrBuild, YdrLight
+from ..ydr.builder import _prepare_embedded_texture_dictionary, _write_drawable_payload
+from ..ydr.gen9 import load_gen9_shader_library
+from ..ydr.prepare import (
+    PreparedLods,
+    PreparedMaterial,
+    compute_model_collection_bounds,
+    prepare_build,
+)
+from ..ydr.shaders import ShaderLibrary, load_shader_library
+from ..ydr.write_buffers import GraphicsWriter
+from ..ydr.write_drawable import pages_info_length, write_pages_info
+from ..ydr.write_lights import write_lights
+from ..ydr.write_materials import prepare_materials
+from .binary_validation import validate_yft_bytes
+from .bound_ownership import apply_physics_lod_bound_ref_counts
+from .bound_profiles import (
+    YftPhysicsBoundProfile,
+    coerce_yft_physics_bound_profile,
+)
+from .cloth import YftEnvironmentCloth
+from .cloth_writer import write_environment_cloths
+from .constants import (
+    FRAGMENT_DRAWABLE_SIZE,
+    FRAGMENT_ROOT_SIZE,
+    GEN9_YFT_VERSIONS,
+    LIGHT_ATTRIBUTES_ARRAY_OFFSET,
+)
+from .drawables import YftDrawable
+from .events_writer import (
+    event_set_pointer,
+    write_child_event_pointers,
+    write_event_sets,
+)
+from .fragment import Yft
+from .fragment_drawable import (
+    YftFragmentDrawable,
+    YftFragmentDrawableBuild,
+    YftFragmentDrawableName,
+    YftFragmentMatrix,
+)
+from .glass import YftGlassPane, YftVehicleGlassWindows
+from .glass_writer import write_glass_panes, write_vehicle_glass_windows
+from .matrices import YftSharedMatrixSet
+from .matrices_writer import write_shared_matrix_set
+from .physics import YftPhysicsLod
+from .physics_authoring import (
+    normalize_physics_lod,
+    physics_lod_pointers_for,
+)
+from .physics_writer import write_physics_child_header, write_physics_lod_group
+from .resource_headers import YftRuntimeHeaders, yft_runtime_headers
+from .validation import validate_yft
+
+_DAT_VIRTUAL_BASE = 0x50000000
+
+
+def _virtual(offset: int) -> int:
+    return _DAT_VIRTUAL_BASE + int(offset)
+
+
+@dataclasses.dataclass(slots=True)
+class _PreparedFragmentDrawable:
+    label: str
+    name: str
+    build: YdrBuild
+    materials: list[PreparedMaterial]
+    lods: PreparedLods
+    geometry_bounds: tuple[Vector3, Vector3, Vector3, float]
+    texture_sections: ResourceSections | None = None
+    fragment: YftFragmentDrawable | YftFragmentDrawableBuild | None = None
+    source_id: int = 0
+    root_offset: int = 0
+
+
+def _drawable_build(drawable: Ydr | YdrBuild, *, name: str, version: int) -> YdrBuild:
+    build = drawable if isinstance(drawable, YdrBuild) else drawable.to_build(name=name)
+    return dataclasses.replace(build, name=build.name or name, version=int(version))
+
+
+def _fragment_drawable_name(
+    fragment: YftFragmentDrawable | YftFragmentDrawableBuild | None,
+    default: str,
+) -> str | None:
+    if (
+        fragment is None
+        or fragment.skeleton_type_name is YftFragmentDrawableName.DERIVE
+        or fragment.skeleton_type_name == ""
+    ):
+        return default
+    if fragment.skeleton_type_name is YftFragmentDrawableName.NULL:
+        return None
+    return fragment.skeleton_type_name
+
+
+def _prepare_drawable(
+    drawable: Ydr | YdrBuild,
+    *,
+    label: str,
+    name: str,
+    version: int,
+    shader_library: ShaderLibrary,
+    generate_normals: bool,
+    generate_tangents: bool,
+    fill_vertex_colours: bool,
+    allow_empty: bool = False,
+    enhanced: bool = False,
+) -> _PreparedFragmentDrawable:
+    build = _drawable_build(drawable, name=name, version=version)
+    if build.model_count == 0 and not allow_empty:
+        raise ValueError(f"YFT drawable '{name}' has no models")
+    gen9_library = load_gen9_shader_library() if enhanced else None
+    materials, lods = prepare_build(
+        build,
+        shader_library,
+        prepare_materials=(
+            lambda *args, **kwargs: prepare_materials(
+                *args,
+                enhanced=enhanced,
+                gen9_library=gen9_library,
+                **kwargs,
+            )
+        ),
+        generate_normals=generate_normals,
+        generate_tangents=generate_tangents,
+        fill_vertex_colours=fill_vertex_colours,
+    )
+    return _PreparedFragmentDrawable(
+        label=label,
+        name=name,
+        build=build,
+        materials=materials,
+        lods=lods,
+        geometry_bounds=compute_model_collection_bounds(
+            [model for models in lods.values() for model in models],
+            skeleton=build.skeleton,
+        ),
+        fragment=(
+            drawable
+            if isinstance(drawable, (YftFragmentDrawable, YftFragmentDrawableBuild))
+            else None
+        ),
+        source_id=id(drawable),
+    )
+
+
+def _freeze_material_value(value: object) -> object:
+    if dataclasses.is_dataclass(value):
+        return tuple(
+            (field.name, _freeze_material_value(getattr(value, field.name)))
+            for field in dataclasses.fields(value)
+        )
+    if isinstance(value, dict):
+        return tuple(
+            sorted(
+                (
+                    str(key).casefold(),
+                    _freeze_material_value(item),
+                )
+                for key, item in value.items()
+            )
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_material_value(item) for item in value)
+    if isinstance(value, Path):
+        return value.as_posix().casefold()
+    if isinstance(value, str):
+        return value.casefold()
+    return value
+
+
+def _prepared_material_key(material: PreparedMaterial) -> tuple[object, ...]:
+    return (
+        material.shader_file_name.casefold(),
+        int(material.render_bucket),
+        _freeze_material_value(material.textures),
+        _freeze_material_value(material.parameters),
+        _freeze_material_value(material.gen9_definition),
+    )
+
+
+def _merge_embedded_textures(
+    main: _PreparedFragmentDrawable,
+    shared_drawables: Sequence[_PreparedFragmentDrawable],
+) -> None:
+    from ..ytd import Ytd
+
+    dictionaries = [
+        item.build.embedded_textures
+        for item in (main, *shared_drawables)
+        if item.build.embedded_textures is not None
+        and item.build.embedded_textures.textures
+    ]
+    if not dictionaries:
+        return
+
+    merged = Ytd(game=dictionaries[0].game)
+    by_name = {}
+    for dictionary in dictionaries:
+        for texture in dictionary.textures:
+            key = texture.name.casefold()
+            previous = by_name.get(key)
+            if previous is not None and previous != texture:
+                raise ValueError(
+                    "Fragment drawables cannot share two different embedded "
+                    f"textures named '{texture.name}'"
+                )
+            if previous is None:
+                by_name[key] = texture
+                merged.textures.append(texture)
+    main.build = dataclasses.replace(main.build, embedded_textures=merged)
+    for item in shared_drawables:
+        item.build = dataclasses.replace(item.build, embedded_textures=None)
+
+
+def _share_fragment_shader_group(
+    main: _PreparedFragmentDrawable,
+    shared_drawables: Sequence[_PreparedFragmentDrawable],
+) -> None:
+    """Remap secondary fragment geometry to the common drawable shader group."""
+
+    _merge_embedded_textures(main, shared_drawables)
+    shared_materials = list(main.materials)
+    shared_indices: dict[tuple[object, ...], int] = {}
+    for material in shared_materials:
+        shared_indices.setdefault(_prepared_material_key(material), material.index)
+
+    for item in shared_drawables:
+        local_to_shared: dict[int, int] = {}
+        for material in item.materials:
+            key = _prepared_material_key(material)
+            shared_index = shared_indices.get(key)
+            if shared_index is None:
+                shared_index = len(shared_materials)
+                shared_materials.append(
+                    dataclasses.replace(material, index=shared_index)
+                )
+                shared_indices[key] = shared_index
+            local_to_shared[int(material.index)] = shared_index
+
+        for models in item.lods.values():
+            for model in models:
+                for mesh in model.meshes:
+                    local_index = int(mesh.material_index)
+                    if local_index not in local_to_shared:
+                        raise ValueError(
+                            f"YFT drawable '{item.name}' geometry references "
+                            f"missing local material {local_index}"
+                        )
+                    mesh.material_index = local_to_shared[local_index]
+
+    main.materials = shared_materials
+
+
+def _write_fragment_matrix(
+    system: ResourceWriter, offset: int, matrix: YftFragmentMatrix
+) -> None:
+    for index, (column, flags) in enumerate(zip(matrix.columns, matrix.flags)):
+        column_offset = offset + (index * 16)
+        system.pack_into("3f", column_offset, *column)
+        system.pack_into("I", column_offset + 12, int(flags))
+
+
+def _write_fragment_drawable_tail(
+    system: ResourceWriter,
+    item: _PreparedFragmentDrawable,
+    *,
+    bound_offset: int,
+    runtime_headers: YftRuntimeHeaders,
+) -> None:
+    fragment = item.fragment
+    matrix = (
+        fragment.fragment_matrix
+        if fragment is not None
+        else YftFragmentMatrix.identity()
+    )
+    extra_bounds = fragment.extra_bounds if fragment is not None else ()
+    matrices = fragment.extra_bound_matrices if fragment is not None else ()
+    if len(extra_bounds) != len(matrices):
+        raise ValueError(
+            f"YFT drawable '{item.name}' must have one matrix per extra bound"
+        )
+
+    extra_bound_offsets = [
+        (
+            write_bound_resource(
+                system,
+                extra_bound,
+                ref_counts=calculate_bound_ref_counts((extra_bound,)),
+                file_vft_resolver=(
+                    gen9_bound_file_vft if runtime_headers.enhanced else None
+                ),
+            )
+            if extra_bound is not None
+            else 0
+        )
+        for extra_bound in extra_bounds
+    ]
+    bounds_array_offset = (
+        system.alloc(len(extra_bound_offsets) * 8, 8) if extra_bound_offsets else 0
+    )
+    for index, extra_bound_offset in enumerate(extra_bound_offsets):
+        system.pack_into(
+            "Q",
+            bounds_array_offset + (index * 8),
+            _virtual(extra_bound_offset) if extra_bound_offset else 0,
+        )
+
+    matrices_offset = system.alloc(len(matrices) * 64, 16) if matrices else 0
+    for index, extra_matrix in enumerate(matrices):
+        _write_fragment_matrix(system, matrices_offset + (index * 64), extra_matrix)
+
+    name = _fragment_drawable_name(fragment, item.name)
+    name_offset = system.c_string(name) if name else 0
+    root = item.root_offset
+    _write_fragment_matrix(system, root + 0xB0, matrix)
+    system.pack_into("Q", root + 0xF0, _virtual(bound_offset) if bound_offset else 0)
+    system.pack_into(
+        "Q",
+        root + 0xF8,
+        _virtual(bounds_array_offset) if bounds_array_offset else 0,
+    )
+    system.pack_into("H", root + 0x100, len(extra_bounds))
+    system.pack_into("H", root + 0x102, len(extra_bounds))
+    system.pack_into(
+        "Q", root + 0x108, _virtual(matrices_offset) if matrices_offset else 0
+    )
+    system.pack_into("H", root + 0x110, len(matrices))
+    system.pack_into(
+        "H",
+        root + 0x112,
+        1 if fragment is None or fragment.load_skeleton else 0,
+    )
+    system.pack_into("Q", root + 0x130, _virtual(name_offset) if name_offset else 0)
+
+
+def _prepared_drawables(
+    yft: Yft,
+    *,
+    shader_library: ShaderLibrary,
+    generate_normals: bool,
+    generate_tangents: bool,
+    fill_vertex_colours: bool,
+) -> tuple[
+    _PreparedFragmentDrawable | None,
+    list[_PreparedFragmentDrawable],
+    _PreparedFragmentDrawable | None,
+    list[_PreparedFragmentDrawable],
+]:
+    version = int(yft.version)
+    enhanced = version in GEN9_YFT_VERSIONS
+    main = (
+        _prepare_drawable(
+            yft.main_drawable,
+            label="drawable",
+            name=f"{yft.name}_drawable",
+            version=version,
+            shader_library=shader_library,
+            generate_normals=generate_normals,
+            generate_tangents=generate_tangents,
+            fill_vertex_colours=fill_vertex_colours,
+            enhanced=enhanced,
+        )
+        if yft.main_drawable is not None
+        else None
+    )
+    extras = [
+        _prepare_drawable(
+            entry.drawable,
+            label=entry.label,
+            name=entry.name or entry.label or f"extra_{index}",
+            version=version,
+            shader_library=shader_library,
+            generate_normals=generate_normals,
+            generate_tangents=generate_tangents,
+            fill_vertex_colours=fill_vertex_colours,
+            enhanced=enhanced,
+        )
+        for index, entry in enumerate(yft.drawables)
+    ]
+    cloth = (
+        _prepare_drawable(
+            yft.cloth_drawable,
+            label="drawable_cloth",
+            name=f"{yft.name}_cloth",
+            version=version,
+            shader_library=shader_library,
+            generate_normals=generate_normals,
+            generate_tangents=generate_tangents,
+            fill_vertex_colours=fill_vertex_colours,
+            enhanced=enhanced,
+        )
+        if yft.cloth_drawable is not None
+        else None
+    )
+    physics: list[_PreparedFragmentDrawable] = []
+    seen: set[int] = set()
+    for index, entity in enumerate(yft.iter_physics_entities()):
+        drawable = entity.drawable
+        if drawable is None or id(drawable) in seen:
+            continue
+        seen.add(id(drawable))
+        physics.append(
+            _prepare_drawable(
+                drawable,
+                label=entity.label or f"physics_entity_{index}",
+                name=entity.label or f"{yft.name}_physics_{index}",
+                version=version,
+                shader_library=shader_library,
+                generate_normals=generate_normals,
+                generate_tangents=generate_tangents,
+                fill_vertex_colours=fill_vertex_colours,
+                allow_empty=True,
+                enhanced=enhanced,
+            )
+        )
+    if main is not None:
+        _share_fragment_shader_group(main, [*extras, *physics])
+    # Shader sharing merges secondary textures into the main dictionary.
+    for item in [main, *extras, cloth, *physics]:
+        if item is not None:
+            item.texture_sections = _prepare_embedded_texture_dictionary(item.build, enhanced=enhanced)
+    return main, extras, cloth, physics
+
+
+def create_yft(
+    drawable: Ydr | YdrBuild,
+    *,
+    name: str = "",
+    version: int = 162,
+    damaged_drawable: Ydr | YdrBuild | None = None,
+    cloth_drawable: Ydr | YdrBuild | None = None,
+    environment_cloths: Sequence[YftEnvironmentCloth] = (),
+    glass_panes: Sequence[YftGlassPane] = (),
+    vehicle_glass_windows: YftVehicleGlassWindows | None = None,
+    shared_matrix_set: YftSharedMatrixSet | None = None,
+    lights: Sequence[YdrLight] = (),
+    extra_drawables: Sequence[
+        YftDrawable | tuple[str, Ydr | YdrBuild] | Ydr | YdrBuild
+    ] = (),
+    physics_lods: Sequence[YftPhysicsLod] = (),
+    physics_bound: Bound | None = None,
+    physics_bound_profile: YftPhysicsBoundProfile | str = (YftPhysicsBoundProfile.PROP),
+    physics_density: float | None = None,
+    bounding_sphere: Vector4 | None = None,
+    user_data: int = 0,
+) -> Yft:
+    bound_profile = coerce_yft_physics_bound_profile(physics_bound_profile)
+    yft = Yft(
+        version=int(version),
+        path=name,
+        main_drawable=drawable,
+        physics_bound_profile=bound_profile,
+    )
+    yft.cloth_drawable = cloth_drawable
+    yft.environment_cloths = list(environment_cloths)
+    yft.glass_panes = list(glass_panes)
+    yft.vehicle_glass_windows = vehicle_glass_windows
+    yft.shared_matrix_set = shared_matrix_set
+    yft.lights = list(lights)
+    yft.user_data = int(user_data)
+    if bounding_sphere is not None:
+        if not isinstance(bounding_sphere, Vector4):
+            raise TypeError("bounding_sphere must be a Vector4")
+        yft.bounding_sphere = bounding_sphere
+    for index, entry in enumerate(extra_drawables):
+        if isinstance(entry, YftDrawable):
+            yft.drawables.append(entry)
+        elif isinstance(entry, tuple):
+            label, extra = entry
+            yft.drawables.append(YftDrawable(str(label), extra, name=str(label)))
+        else:
+            label = f"extra_{index}"
+            yft.drawables.append(YftDrawable(label, entry, name=label))
+    if damaged_drawable is not None:
+        yft.drawables.append(
+            YftDrawable("damaged", damaged_drawable, name=f"{yft.name}_damaged")
+        )
+        yft.state = dataclasses.replace(
+            yft.state, damaged_drawable_index=len(yft.drawables) - 1
+        )
+    if physics_lods:
+        yft.physics_lod_details = [
+            normalize_physics_lod(
+                lod,
+                composite_bound=lod.composite_bound or physics_bound,
+                density=physics_density,
+                has_damaged_drawable=damaged_drawable is not None,
+                profile=bound_profile,
+            )
+            for lod in physics_lods
+        ]
+        yft.physics_lods = physics_lod_pointers_for(yft.physics_lod_details)
+        for lod in yft.physics_lod_details:
+            apply_physics_lod_bound_ref_counts(
+                lod,
+                fragment_drawable_fallback=yft.main_drawable is not None,
+            )
+    return yft
+
+
+def _validate_authoring_yft(yft: Yft) -> None:
+    report = validate_yft(yft)
+    seen: set[int] = set()
+    for entry in (*yft.iter_drawables(), *yft.iter_physics_drawables()):
+        if id(entry.drawable) in seen:
+            continue
+        seen.add(id(entry.drawable))
+        for field_name in (
+            "locators_pointer",
+            "animations_pointer",
+            "cloned_shader_group_pointer",
+        ):
+            pointer = getattr(entry.drawable, field_name, 0)
+            path = f"drawables.{entry.label}.{field_name}"
+            if not isinstance(pointer, int):
+                report.issue(
+                    "yft.drawable.source_pointer.invalid_type",
+                    "source resource pointer must be an integer",
+                    path=path,
+                )
+            elif pointer:
+                report.issue(
+                    "yft.drawable.source_pointer.cannot_reauthor",
+                    "source resource pointers cannot be reused by authoring",
+                    path=path,
+                )
+    report.raise_for_errors()
+
+
+def _write_fragment_root(
+    system: ResourceWriter,
+    *,
+    page_counts: tuple[int, int],
+    yft: Yft,
+    main: _PreparedFragmentDrawable | None,
+    extras: Sequence[_PreparedFragmentDrawable],
+    cloth: _PreparedFragmentDrawable | None,
+    event_set_offsets: dict[int, int],
+    runtime_headers: YftRuntimeHeaders,
+) -> int:
+    pages_info_off = system.alloc(pages_info_length(page_counts), 16)
+    write_pages_info(system, pages_info_off, page_counts)
+
+    extra_ptrs_off = system.alloc(len(extras) * 8, 8) if extras else 0
+    extra_names_off = system.alloc(len(extras) * 8, 8) if extras else 0
+    for index, item in enumerate(extras):
+        system.pack_into("Q", extra_ptrs_off + index * 8, _virtual(item.root_offset))
+        system.pack_into(
+            "Q", extra_names_off + index * 8, _virtual(system.c_string(item.name))
+        )
+
+    damaged_index = int(yft.state.damaged_drawable_index)
+    damaged = extras[damaged_index] if 0 <= damaged_index < len(extras) else None
+    tune_name_off = system.c_string(yft.tune_name) if yft.tune_name else 0
+    glass_panes_off = write_glass_panes(
+        system,
+        yft.glass_panes,
+        virtual_base=_DAT_VIRTUAL_BASE,
+        enhanced=int(yft.version) in GEN9_YFT_VERSIONS,
+    )
+    vehicle_glass_off = write_vehicle_glass_windows(
+        system,
+        yft.vehicle_glass_windows,
+    )
+    shared_matrix_set = yft.shared_matrix_set
+    if (
+        shared_matrix_set is None
+        and main is not None
+        and main.build.skeleton is not None
+        and main.build.skeleton.bones
+    ):
+        shared_matrix_set = YftSharedMatrixSet.from_skeleton(
+            main.build.skeleton,
+            is_skinned=any(
+                model.skeleton_binding.is_skinned
+                for models in main.build.lods.values()
+                for model in models
+            ),
+        )
+    shared_matrix_off = write_shared_matrix_set(system, shared_matrix_set)
+    lights_off = write_lights(system, yft.lights)
+    needs_root_child = yft.root_child is not None or not yft.physics_lod_details
+    root_child_off = system.alloc(0x100, 16) if needs_root_child else 0
+    root_child = yft.root_child
+    if root_child_off and main is not None:
+        write_physics_child_header(
+            system,
+            root_child_off,
+            root_child,
+            runtime_headers=runtime_headers,
+        )
+        system.pack_into(
+            "ff",
+            root_child_off + 0x08,
+            float(root_child.undamaged_mass) if root_child is not None else 1.0,
+            (
+                float(
+                    root_child.undamaged_mass
+                    if root_child.damaged_mass is None
+                    else root_child.damaged_mass
+                )
+                if root_child is not None
+                else 1.0
+            ),
+        )
+        if root_child is not None:
+            system.data[root_child_off + 0x10] = (
+                int(root_child.owner_group_pointer_index) & 0xFF
+            )
+            system.data[root_child_off + 0x11] = int(root_child.flags) & 0xFF
+            system.pack_into(
+                "H", root_child_off + 0x12, int(root_child.bone_id) & 0xFFFF
+            )
+            write_child_event_pointers(
+                system,
+                root_child_off,
+                root_child.events,
+                event_set_offsets,
+                virtual_base=_DAT_VIRTUAL_BASE,
+            )
+        system.pack_into("Q", root_child_off + 0xA0, _virtual(main.root_offset))
+        system.pack_into(
+            "Q",
+            root_child_off + 0xA8,
+            _virtual(damaged.root_offset) if damaged is not None else 0,
+        )
+
+    system.pack_into("I", 0x00, runtime_headers.fragment_type)
+    system.pack_into("I", 0x04, 1)
+    system.pack_into("Q", 0x08, _virtual(pages_info_off))
+    system.pack_into("4f", 0x20, *yft.bounding_sphere)
+    system.pack_into("Q", 0x30, _virtual(main.root_offset) if main is not None else 0)
+    system.pack_into("Q", 0x38, _virtual(extra_ptrs_off) if extra_ptrs_off else 0)
+    system.pack_into("Q", 0x40, _virtual(extra_names_off) if extra_names_off else 0)
+    system.pack_into("I", 0x48, len(extras))
+    system.pack_into("i", 0x4C, damaged_index if damaged is not None else -1)
+    system.pack_into("Q", 0x50, _virtual(root_child_off) if root_child_off else 0)
+    system.pack_into("Q", 0x58, _virtual(tune_name_off) if tune_name_off else 0)
+    system.pack_into("Q", 0x80, int(yft.user_data))
+    system.pack_into(
+        "Q",
+        0x88,
+        event_set_pointer(
+            yft.collision_event_set,
+            event_set_offsets,
+            virtual_base=_DAT_VIRTUAL_BASE,
+        ),
+    )
+    system.pack_into("Q", 0xA8, _virtual(shared_matrix_off) if shared_matrix_off else 0)
+    system.pack_into("Q", 0xB0, int(yft.state.estimated_cache_size))
+    system.pack_into("Q", 0xB8, int(yft.state.estimated_articulated_cache_size))
+    system.data[0xC0] = int(yft.state.entity_class) & 0xFF
+    system.data[0xC1] = int(yft.state.art_asset_id).to_bytes(1, "little", signed=True)[
+        0
+    ]
+    system.data[0xC2] = 1 if yft.state.attach_bottom_end else 0
+    system.pack_into("H", 0xC4, int(yft.state.flags) & 0xFFFF)
+    system.pack_into("i", 0xC8, int(yft.state.client_class_id))
+    system.pack_into("f", 0xCC, float(yft.state.unbroken_elasticity))
+    system.pack_into("f", 0xD0, float(yft.state.gravity_factor))
+    system.pack_into("f", 0xD4, float(yft.state.buoyancy_factor))
+    system.data[0xD8] = int(yft.state.glass_attachment_bone) & 0xFF
+    system.data[0xD9] = len(yft.glass_panes) & 0xFF
+    system.pack_into("Q", 0xE0, _virtual(glass_panes_off) if glass_panes_off else 0)
+    system.pack_into("Q", 0xF8, _virtual(cloth.root_offset) if cloth is not None else 0)
+    system.pack_into(
+        "Q", 0x120, _virtual(vehicle_glass_off) if vehicle_glass_off else 0
+    )
+    if lights_off:
+        system.pack_into(
+            "Q",
+            LIGHT_ATTRIBUTES_ARRAY_OFFSET,
+            _virtual(lights_off),
+        )
+        system.pack_into("H", LIGHT_ATTRIBUTES_ARRAY_OFFSET + 8, len(yft.lights))
+        system.pack_into("H", LIGHT_ATTRIBUTES_ARRAY_OFFSET + 10, len(yft.lights))
+    return root_child_off
+
+
+def _build_yft_payload(
+    yft: Yft,
+    prepared: tuple[
+        _PreparedFragmentDrawable | None,
+        list[_PreparedFragmentDrawable],
+        _PreparedFragmentDrawable | None,
+        list[_PreparedFragmentDrawable],
+    ],
+    *,
+    page_counts: tuple[int, int],
+) -> tuple[bytes, bytes, list[ResourceBlockSpan], list[ResourceBlockSpan]]:
+    system = ResourceWriter(initial_size=align(FRAGMENT_ROOT_SIZE, 16))
+    graphics = GraphicsWriter()
+    main, extras, cloth, physics = prepared
+    runtime_headers = yft_runtime_headers(yft.version)
+    shared_shader_group_ids = {id(item) for item in (*extras, *physics)}
+    for item in [main, *extras, cloth, *physics]:
+        if item is None:
+            continue
+        item.root_offset = system.alloc(FRAGMENT_DRAWABLE_SIZE, 16)
+        bound_offset = _write_drawable_payload(
+            system,
+            graphics,
+            item.build,
+            [] if id(item) in shared_shader_group_ids else item.materials,
+            item.lods,
+            page_counts,
+            root_off=item.root_offset,
+            geometry_bounds=item.geometry_bounds,
+            texture_sections=item.texture_sections,
+            runtime_headers=runtime_headers.drawable,
+            enhanced=runtime_headers.enhanced,
+            write_pages=False,
+            write_extensions=False,
+        )
+        _write_fragment_drawable_tail(
+            system,
+            item,
+            bound_offset=bound_offset,
+            runtime_headers=runtime_headers,
+        )
+    event_set_offsets = write_event_sets(
+        system,
+        yft.iter_event_sets(),
+        runtime_headers=runtime_headers,
+    )
+    drawable_offsets: dict[str, int] = {}
+    if main is not None:
+        drawable_offsets["drawable"] = main.root_offset
+        drawable_offsets[main.label] = main.root_offset
+        drawable_offsets[main.name] = main.root_offset
+    for item in extras:
+        drawable_offsets[item.label] = item.root_offset
+        drawable_offsets[item.name] = item.root_offset
+    if cloth is not None:
+        drawable_offsets["drawable_cloth"] = cloth.root_offset
+        drawable_offsets[cloth.label] = cloth.root_offset
+        drawable_offsets[cloth.name] = cloth.root_offset
+    write_environment_cloths(
+        system,
+        yft.environment_cloths,
+        drawable_offsets=drawable_offsets,
+        runtime_headers=runtime_headers.cloth,
+        enhanced=runtime_headers.enhanced,
+    )
+    root_child_off = _write_fragment_root(
+        system,
+        page_counts=page_counts,
+        yft=yft,
+        main=main,
+        extras=extras,
+        cloth=cloth,
+        event_set_offsets=event_set_offsets,
+        runtime_headers=runtime_headers,
+    )
+    fallback_bound = None
+    if main is not None and getattr(main.build, "bound", None) is not None:
+        fallback_bound = main.build.bound
+    physics_group_off, normalized_lods = write_physics_lod_group(
+        system,
+        yft.physics_lod_details,
+        root_child_offset=root_child_off,
+        main_drawable_offset=main.root_offset if main is not None else 0,
+        damaged_drawable_offset=(
+            extras[yft.state.damaged_drawable_index].root_offset
+            if 0 <= yft.state.damaged_drawable_index < len(extras)
+            else 0
+        ),
+        entity_drawable_offsets={item.source_id: item.root_offset for item in physics},
+        event_set_offsets=event_set_offsets,
+        fallback_bound=fallback_bound,
+        bound_profile=yft.physics_bound_profile,
+        runtime_headers=runtime_headers,
+    )
+    if physics_group_off:
+        system.pack_into("Q", 0xF0, _virtual(physics_group_off))
+        yft.physics_lod_details = list(normalized_lods)
+        yft.physics_lods = physics_lod_pointers_for(normalized_lods)
+    return system.finish(), graphics.finish(), system.block_spans, graphics.block_spans
+
+
+def build_yft_bytes(
+    source: Yft,
+    *,
+    shader_library: ShaderLibrary | None = None,
+    generate_normals: bool = True,
+    generate_tangents: bool = True,
+    fill_vertex_colours: bool = True,
+    lossless: bool = False,
+) -> bytes:
+    if lossless:
+        if not source.raw_bytes:
+            raise ValueError("lossless YFT writing requires a YFT read from bytes")
+        return bytes(source.raw_bytes)
+    for lod in source.physics_lod_details:
+        apply_physics_lod_bound_ref_counts(
+            lod,
+            fragment_drawable_fallback=source.main_drawable is not None,
+        )
+    _validate_authoring_yft(source)
+    active_shader_library = (
+        shader_library if shader_library is not None else load_shader_library()
+    )
+    prepared = _prepared_drawables(
+        source,
+        shader_library=active_shader_library,
+        generate_normals=generate_normals,
+        generate_tangents=generate_tangents,
+        fill_vertex_colours=fill_vertex_colours,
+    )
+    if prepared[0] is None:
+        raise ValueError("YFT writer requires a common drawable")
+    if source.bounding_sphere == Vector4():
+        _center, _bounds_min, _bounds_max, radius = prepared[0].geometry_bounds
+        source = dataclasses.replace(
+            source,
+            bounding_sphere=Vector4(_center.x, _center.y, _center.z, radius),
+        )
+
+    page_counts = (0, 0)
+    system_flags = None
+    graphics_flags = None
+    system_data = b""
+    graphics_data = b""
+    for _ in range(16):
+        system_data, graphics_data, system_blocks, graphics_blocks = _build_yft_payload(
+            source, prepared, page_counts=page_counts
+        )
+        system_data, graphics_data, system_flags, graphics_flags = (
+            layout_resource_sections(
+                system_data,
+                system_blocks,
+                graphics_data,
+                graphics_blocks,
+                version=int(source.version),
+            )
+        )
+        next_counts = (
+            get_resource_total_page_count(system_flags),
+            get_resource_total_page_count(graphics_flags),
+        )
+        if next_counts == page_counts:
+            break
+        page_counts = next_counts
+    else:
+        raise RuntimeError("YFT builder page-info sizing did not converge")
+
+    assert system_flags is not None
+    assert graphics_flags is not None
+    result = build_rsc7(
+        system_data,
+        version=int(source.version),
+        graphics_data=graphics_data,
+        system_alignment=0x200,
+        graphics_alignment=0x200,
+        system_flags=system_flags,
+        graphics_flags=graphics_flags,
+    )
+    validate_yft_bytes(
+        result,
+        profile=source.physics_bound_profile,
+    ).raise_for_errors()
+    return result
+
+
+def save_yft(source: Yft, destination: str | Path, **kwargs) -> Path:
+    return atomic_write_bytes(destination, build_yft_bytes(source, **kwargs))
+
+
+__all__ = [
+    "build_yft_bytes",
+    "create_yft",
+    "save_yft",
+]

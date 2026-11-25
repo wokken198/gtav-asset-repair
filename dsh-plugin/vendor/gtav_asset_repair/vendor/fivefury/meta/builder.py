@@ -1,0 +1,343 @@
+from __future__ import annotations
+
+import dataclasses
+import struct
+from functools import lru_cache
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any
+
+from .. import _native_abi3
+from ..binary import align
+from ..hashing import jenk_hash
+from ..resource import get_resource_flags_from_blocks, get_resource_total_page_count
+from ..vector import Quaternion, Vector2, Vector3, Vector4
+from . import (
+    FLOAT_XYZ_NAME_HASH,
+    META_FILE_VFT,
+    META_ROOT_SIZE,
+    RESOURCE_FILE_BASE_SIZE,
+    MetaEnumInfo,
+    MetaStructInfo,
+    RawStruct,
+)
+from .codec import camel_to_snake, scalar_plan, schema_enum_bytes, schema_field_bytes
+from .defs import (
+    META_TYPE_NAME_ARRAYINFO,
+    STRUCTS_BY_HASH,
+    SYSTEM_BASE,
+    MetaDataType,
+)
+from .utils import _array_info_for_entries
+
+
+@dataclasses.dataclass(slots=True)
+class _WritableBlock:
+    name_hash: int
+    data: bytearray = dataclasses.field(default_factory=bytearray)
+
+
+class MetaBuilder:
+    MAX_BLOCK_LENGTH = 0x4000
+    RESERVED_SYSTEM_PAGE_SLOTS = 128
+    RESERVED_PAGES_INFO_SIZE = 16 + (8 * RESERVED_SYSTEM_PAGE_SLOTS)
+    META_LAYOUT_OFFSET = 0x480
+
+    def __init__(
+        self,
+        *,
+        struct_infos: Iterable[MetaStructInfo] = (),
+        enum_infos: Iterable[MetaEnumInfo] = (),
+        name: str = "",
+    ) -> None:
+        struct_info_list = list(struct_infos)
+        enum_info_list = list(enum_infos)
+        self.name = name
+        self.struct_infos: dict[int, MetaStructInfo] = {info.name_hash: info for info in struct_info_list}
+        self.enum_infos: dict[int, MetaEnumInfo] = {info.name_hash: info for info in enum_info_list}
+        self.struct_info_order: list[int] = [info.name_hash for info in struct_info_list]
+        self.enum_info_order: list[int] = [info.name_hash for info in enum_info_list]
+        self.used_struct_hashes: set[int] = set()
+        self.used_enum_hashes: set[int] = set()
+        self.blocks: list[_WritableBlock] = []
+        self.page_size: int = 0x2000
+        self.page_count: int = 1
+        self.page_flags: int = 0
+
+    def register_struct(self, info: MetaStructInfo) -> None:
+        if info.name_hash not in self.struct_infos:
+            self.struct_info_order.append(info.name_hash)
+        self.struct_infos[info.name_hash] = info
+
+    def register_enum(self, info: MetaEnumInfo) -> None:
+        if info.name_hash not in self.enum_infos:
+            self.enum_info_order.append(info.name_hash)
+        self.enum_infos[info.name_hash] = info
+
+    def build(self, root_name_hash: int = 0, root_value: Mapping[str, Any] | RawStruct | None = None) -> bytes:
+        self.blocks.clear()
+        self.used_struct_hashes.clear()
+        self.used_enum_hashes.clear()
+        if root_name_hash and root_value is not None:
+            blocks, used_hashes = _native_abi3.meta_graph_write(
+                root_name_hash, root_value, self._graph_schema, RawStruct, Mapping,
+                _coerce_float_xyz, self._inline_size, jenk_hash,
+                self.MAX_BLOCK_LENGTH, FLOAT_XYZ_NAME_HASH,
+            )
+            self.blocks.extend(_WritableBlock(name_hash, data) for name_hash, data in blocks)
+            for name_hash in used_hashes:
+                self._mark_struct_used(name_hash)
+            root_block_id = 1
+        else:
+            root_block_id = 0
+        return self._compose_system_stream(root_block_id)
+
+    def _choose_page_size(self) -> int:
+        max_block_size = max((len(block.data) for block in self.blocks), default=0)
+        page_size = 0x2000
+        while page_size < max_block_size:
+            page_size <<= 1
+        return page_size
+
+    def _layout_data_blocks(self, start_offset: int) -> tuple[int, list[int], int]:
+        page_size = self._choose_page_size()
+        offsets: list[int] = []
+        offset = align(start_offset, 16)
+        for block in self.blocks:
+            block_length = len(block.data)
+            offset = align(offset, 16)
+            if block_length:
+                start_page = offset // page_size
+                end_page = (offset + block_length - 1) // page_size
+                if end_page != start_page:
+                    offset = align(offset, page_size)
+            offsets.append(offset)
+            offset += block_length
+        total_size = align(offset, page_size)
+        return page_size, offsets, total_size
+
+    def _graph_schema(self, name_hash: int):
+        info = self._lookup_struct_info(name_hash)
+        return _graph_plan(info.structure_size, tuple(info.entries))
+
+    def _inline_size(self, name_hash: int) -> int:
+        info = self.struct_infos.get(name_hash)
+        if info is not None:
+            return info.structure_size
+        definition = STRUCTS_BY_HASH.get(name_hash)
+        if definition is not None:
+            return definition.size
+        raise KeyError(f"No size information available for inline structure 0x{name_hash:08X}")
+
+    def _lookup_struct_info(self, name_hash: int) -> MetaStructInfo:
+        info = self.struct_infos.get(name_hash)
+        if info is not None:
+            return info
+        struct_def = STRUCTS_BY_HASH.get(name_hash)
+        if struct_def is None:
+            raise KeyError(f"No structure info registered for 0x{name_hash:08X}")
+        if struct_def.opaque:
+            raise KeyError(f"Opaque structure 0x{name_hash:08X} needs explicit MetaStructInfo")
+        raise KeyError(f"Explicit MetaStructInfo required for 0x{name_hash:08X}")
+
+    def _mark_enum_used(self, name_hash: int) -> None:
+        if name_hash in self.enum_infos:
+            self.used_enum_hashes.add(name_hash)
+
+    def _mark_struct_used(self, name_hash: int) -> None:
+        if name_hash in self.used_struct_hashes:
+            return
+        struct_info = self.struct_infos.get(name_hash)
+        if struct_info is None:
+            return
+        self.used_struct_hashes.add(name_hash)
+        for entry in struct_info.entries:
+            if entry.name_hash == META_TYPE_NAME_ARRAYINFO:
+                continue
+            if entry.data_type in (
+                MetaDataType.BYTE_ENUM,
+                MetaDataType.INT_ENUM,
+                MetaDataType.INT_FLAGS_1,
+                MetaDataType.INT_FLAGS_2,
+                MetaDataType.SHORT_FLAGS,
+            ):
+                self._mark_enum_used(entry.reference_key)
+            elif entry.data_type is MetaDataType.STRUCTURE and entry.reference_key:
+                self._mark_struct_used(entry.reference_key)
+
+    def _compose_system_stream(self, root_block_id: int) -> bytes:
+        struct_infos = [self.struct_infos[name_hash] for name_hash in self.struct_info_order if name_hash in self.used_struct_hashes]
+        enum_infos = [self.enum_infos[name_hash] for name_hash in self.enum_info_order if name_hash in self.used_enum_hashes]
+        offset = self.META_LAYOUT_OFFSET
+
+        struct_infos_offset = offset if struct_infos else 0
+        offset += len(struct_infos) * 32
+        offset = align(offset, 16)
+
+        struct_entry_offsets: dict[int, int] = {}
+        struct_entry_payloads: list[tuple[MetaStructInfo, bytes, int]] = []
+        for info in struct_infos:
+            payload = schema_field_bytes(tuple(info.entries))
+            struct_entry_offsets[info.name_hash] = offset
+            struct_entry_payloads.append((info, payload, offset))
+            offset += len(payload)
+
+        enum_infos_offset = offset if enum_infos else 0
+        offset += len(enum_infos) * 24
+        offset = align(offset, 16)
+
+        enum_entry_offsets: dict[int, int] = {}
+        enum_entry_payloads: list[tuple[MetaEnumInfo, bytes, int]] = []
+        for info in enum_infos:
+            payload = schema_enum_bytes(tuple((entry.name_hash, entry.value) for entry in info.entries))
+            enum_entry_offsets[info.name_hash] = offset
+            enum_entry_payloads.append((info, payload, offset))
+            offset += len(payload)
+
+        offset = align(offset, 16)
+        data_blocks_offset = offset if self.blocks else 0
+        offset += len(self.blocks) * 16
+
+        name_bytes = self.name.encode("ascii", errors="ignore") + b"\x00" if self.name else b""
+        name_offset = offset if name_bytes else 0
+        offset += len(name_bytes)
+
+        offset = align(offset, 16)
+        page_size, block_offsets, total_size = self._layout_data_blocks(offset)
+        page_count = max(1, total_size // page_size)
+        self.page_size = page_size
+        self.page_count = page_count
+        page_flags = get_resource_flags_from_blocks(page_count, page_size, 0)
+        self.page_flags = page_flags
+        pages_info_count = get_resource_total_page_count(page_flags)
+        pages_info_offset = META_ROOT_SIZE
+        pages_info_size = 16 + (8 * pages_info_count)
+
+        system = bytearray(total_size)
+
+        struct.pack_into("<IIQ", system, 0, META_FILE_VFT, 1, SYSTEM_BASE + pages_info_offset)
+        struct.pack_into(
+            "<ihbbiiqqqqqhhhh8I",
+            system,
+            RESOURCE_FILE_BASE_SIZE,
+            0x50524430,
+            0x0079,
+            0,
+            0,
+            0,
+            root_block_id,
+            SYSTEM_BASE + struct_infos_offset if struct_infos_offset else 0,
+            SYSTEM_BASE + enum_infos_offset if enum_infos_offset else 0,
+            SYSTEM_BASE + data_blocks_offset if data_blocks_offset else 0,
+            SYSTEM_BASE + name_offset if name_offset else 0,
+            0,
+            len(struct_infos),
+            len(enum_infos),
+            len(self.blocks),
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
+        system[pages_info_offset : pages_info_offset + pages_info_size] = struct.pack("<IIBBHI", 0, 0, pages_info_count, 0, 0, 0) + (b"\x00" * (8 * pages_info_count))
+
+        for info, payload, entry_offset in struct_entry_payloads:
+            system[entry_offset : entry_offset + len(payload)] = payload
+        for info, payload, entry_offset in enum_entry_payloads:
+            system[entry_offset : entry_offset + len(payload)] = payload
+
+        for index, info in enumerate(struct_infos):
+            off = struct_infos_offset + index * 32
+            struct.pack_into(
+                "<IIIIqihh",
+                system,
+                off,
+                info.name_hash,
+                info.key,
+                info.unknown,
+                info.unknown_ch,
+                SYSTEM_BASE + struct_entry_offsets[info.name_hash],
+                info.structure_size,
+                info.unknown_1ch,
+                len(info.entries),
+            )
+
+        for index, info in enumerate(enum_infos):
+            off = enum_infos_offset + index * 24
+            struct.pack_into(
+                "<IIqii",
+                system,
+                off,
+                info.name_hash,
+                info.key,
+                SYSTEM_BASE + enum_entry_offsets[info.name_hash],
+                len(info.entries),
+                info.unknown_14h,
+            )
+
+        for index, block in enumerate(self.blocks):
+            off = data_blocks_offset + index * 16
+            struct.pack_into(
+                "<IIq",
+                system,
+                off,
+                block.name_hash,
+                len(block.data),
+                SYSTEM_BASE + block_offsets[index],
+            )
+            block_offset = block_offsets[index]
+            system[block_offset : block_offset + len(block.data)] = block.data
+
+        if name_bytes:
+            system[name_offset : name_offset + len(name_bytes)] = name_bytes
+        return bytes(system)
+
+
+def build_meta_system(
+    *,
+    root_name_hash: int = 0,
+    root_value: Mapping[str, Any] | RawStruct | None = None,
+    struct_infos: Iterable[MetaStructInfo] = (),
+    enum_infos: Iterable[MetaEnumInfo] = (),
+    name: str = "",
+) -> bytes:
+    return MetaBuilder(struct_infos=struct_infos, enum_infos=enum_infos, name=name).build(
+        root_name_hash=root_name_hash,
+        root_value=root_value,
+    )
+
+
+def _coerce_float_xyz(value: Any) -> tuple[float, float, float]:
+    if isinstance(value, Mapping):
+        return (
+            float(value.get("x", 0.0)),
+            float(value.get("y", 0.0)),
+            float(value.get("z", 0.0)),
+        )
+    if isinstance(value, (Vector2, Vector3, Vector4, Quaternion)):
+        components = value.components
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        components = tuple(value)
+    else:
+        return (0.0, 0.0, 0.0)
+    padded = components[:3] + (0.0,) * max(0, 3 - len(components))
+    return tuple(float(component) for component in padded[:3])
+
+
+@lru_cache(maxsize=256)
+def _graph_plan(size, entries):
+    scalar, complex_fields = scalar_plan(size, entries)
+    fields = []
+    for index, entry, name in complex_fields:
+        array_info = _array_info_for_entries(entries, index)
+        # ARRAY's legacy contract ignores index zero even when its ref_index identifies ARRAYINFO.
+        if entry.data_type is MetaDataType.ARRAY and index == 0:
+            array_info = None
+        fields.append((name, camel_to_snake(name), entry.data_offset, int(entry.data_type),
+                       entry.reference_key, int(array_info.data_type) if array_info else -1,
+                       array_info.reference_key if array_info else 0))
+    return _native_abi3.meta_graph_new(scalar, fields)

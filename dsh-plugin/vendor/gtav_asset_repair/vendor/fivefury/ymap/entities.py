@@ -1,0 +1,232 @@
+from __future__ import annotations
+
+import dataclasses
+import math
+from typing import TYPE_CHECKING, Any
+
+from ..authoring.diagnostics import ValidationReport
+from ..common import dataclass_init_values
+from ..map_extensions import (
+    ExtensionContainer,
+    extensions_from_meta,
+    extensions_to_meta,
+)
+from ..meta.defs import meta_name
+from ..metahash import HashLike, MetaHash, MetaHashFieldsMixin
+from ..vector import Aabb3, Quaternion, Vector3
+from .enums import (
+    YmapEntityFlags,
+    YmapLodLevel,
+    YmapMloInstanceFlags,
+    YmapPriorityLevel,
+    coerce_ymap_entity_flags,
+    coerce_ymap_lod_level,
+    coerce_ymap_mlo_instance_flags,
+    coerce_ymap_priority_level,
+)
+
+if TYPE_CHECKING:
+    from ..ytyp.base_archetype import BaseArchetypeDef
+
+
+_FULL_MATRIX_ROTATION_THRESHOLD = 0.05000000074505806
+
+
+@dataclasses.dataclass(slots=True)
+class EntityDef(MetaHashFieldsMixin, ExtensionContainer):
+    _hash_fields = ("archetype_name",)
+
+    archetype_name: MetaHash | HashLike = 0
+    flags: YmapEntityFlags | int = YmapEntityFlags.NONE
+    guid: int = 0
+    position: Vector3 = dataclasses.field(default_factory=Vector3)
+    rotation: Quaternion = dataclasses.field(default_factory=Quaternion)
+    scale_xy: float = 1.0
+    scale_z: float = 1.0
+    parent_index: int = -1
+    lod_dist: float = 0.0
+    child_lod_dist: float = 0.0
+    lod_level: YmapLodLevel | int = YmapLodLevel.DEPTH_HD
+    num_children: int = 0
+    priority_level: YmapPriorityLevel | int = YmapPriorityLevel.REQUIRED
+    extensions: list[Any] = dataclasses.field(default_factory=list)
+    ambient_occlusion_multiplier: int = 255
+    artificial_ambient_occlusion: int = 255
+    tint_value: int = 0
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.position, Vector3) or not isinstance(
+            self.rotation, Quaternion
+        ):
+            raise TypeError(
+                "EntityDef position and rotation must use nominal math types"
+            )
+        self.flags = coerce_ymap_entity_flags(self.flags)
+        self.lod_level = coerce_ymap_lod_level(self.lod_level)
+        self.priority_level = coerce_ymap_priority_level(self.priority_level)
+
+    def to_meta(self) -> dict[str, Any]:
+        return {
+            "archetypeName": self.archetype_name,
+            "flags": int(self.flags),
+            "guid": self.guid,
+            "position": self.position,
+            "rotation": self.rotation,
+            "scaleXY": self.scale_xy,
+            "scaleZ": self.scale_z,
+            "parentIndex": self.parent_index,
+            "lodDist": self.lod_dist,
+            "childLodDist": self.child_lod_dist,
+            "lodLevel": int(self.lod_level),
+            "numChildren": self.num_children,
+            "priorityLevel": int(self.priority_level),
+            "extensions": extensions_to_meta(self.extensions),
+            "ambientOcclusionMultiplier": self.ambient_occlusion_multiplier,
+            "artificialAmbientOcclusion": self.artificial_ambient_occlusion,
+            "tintValue": self.tint_value,
+            "_meta_name_hash": meta_name("CEntityDef"),
+        }
+
+    def world_rotation(self, archetype: BaseArchetypeDef | None = None) -> Quaternion:
+        """Decode the stored placement quaternion without changing the asset."""
+        from ..ytyp.flags import ArchetypeFlags
+
+        rotation = self.rotation
+        animated = (
+            archetype is not None
+            and bool(archetype.clip_dictionary)
+            and bool(archetype.flags & ArchetypeFlags.HAS_ANIM)
+        )
+        if (
+            animated
+            or abs(rotation.x) > _FULL_MATRIX_ROTATION_THRESHOLD
+            or abs(rotation.y) > _FULL_MATRIX_ROTATION_THRESHOLD
+            or (
+                self.flags & YmapEntityFlags.FULLMATRIX
+                and (rotation.x != 0 or rotation.y != 0)
+            )
+        ):
+            return rotation.inverse()
+        if rotation.w == 1.0:
+            return Quaternion()
+        heading = 2.0 * math.acos(rotation.w)
+        if rotation.z >= 0:
+            heading = -heading
+        return Quaternion.from_euler_xyz(Vector3(0, 0, heading))
+
+    def world_scale(self, archetype: BaseArchetypeDef | None = None) -> Vector3:
+        from ..ytyp.asset_types import ArchetypeAssetType
+
+        if (
+            archetype is not None
+            and archetype.asset_type is ArchetypeAssetType.FRAGMENT
+        ):
+            return Vector3(1, 1, 1)
+        return Vector3(self.scale_xy, self.scale_xy, self.scale_z)
+
+    def world_bounds(
+        self, bounds: Aabb3, archetype: BaseArchetypeDef | None = None
+    ) -> Aabb3:
+        return bounds.transformed(
+            translation=self.position,
+            rotation=self.world_rotation(archetype),
+            scale=self.world_scale(archetype),
+        )
+
+    @classmethod
+    def from_meta(cls, value: Any) -> EntityDef:
+        return cls(
+            archetype_name=value.get("archetypeName", 0),
+            flags=value.get("flags", 0),
+            guid=int(value.get("guid", 0)),
+            position=Vector3.from_iterable(value.get("position", (0.0, 0.0, 0.0))),
+            rotation=Quaternion.from_iterable(
+                value.get("rotation", (0.0, 0.0, 0.0, 1.0))
+            ),
+            scale_xy=float(value.get("scaleXY", 1.0)),
+            scale_z=float(value.get("scaleZ", 1.0)),
+            parent_index=int(value.get("parentIndex", -1)),
+            lod_dist=float(value.get("lodDist", 0.0)),
+            child_lod_dist=float(value.get("childLodDist", 0.0)),
+            lod_level=value.get("lodLevel", 0),
+            num_children=int(value.get("numChildren", 0)),
+            priority_level=value.get("priorityLevel", 0),
+            extensions=extensions_from_meta(value.get("extensions", []) or []),
+            ambient_occlusion_multiplier=int(
+                value.get("ambientOcclusionMultiplier", 255)
+            ),
+            artificial_ambient_occlusion=int(
+                value.get("artificialAmbientOcclusion", 255)
+            ),
+            tint_value=int(value.get("tintValue", 0)),
+        )
+
+
+@dataclasses.dataclass(slots=True)
+class MloInstanceDef(EntityDef):
+    _hash_list_fields = ("default_entity_sets",)
+
+    group_id: int = 0
+    floor_id: int = 0
+    default_entity_sets: list[MetaHash | HashLike] = dataclasses.field(
+        default_factory=list
+    )
+    num_exit_portals: int = 0
+    mlo_inst_flags: YmapMloInstanceFlags | int = YmapMloInstanceFlags.NONE
+
+    def __post_init__(self) -> None:
+        EntityDef.__post_init__(self)
+        self.mlo_inst_flags = coerce_ymap_mlo_instance_flags(self.mlo_inst_flags)
+
+    def world_rotation(self, archetype: BaseArchetypeDef | None = None) -> Quaternion:
+        return self.rotation.normalized()
+
+    def world_scale(self, archetype: BaseArchetypeDef | None = None) -> Vector3:
+        return Vector3(1, 1, 1)
+
+    def build(self, archetype: Any | None = None) -> MloInstanceDef:
+        from .mlo_validation import build_mlo_instance
+
+        return build_mlo_instance(self, archetype)
+
+    def validate(self, archetype: Any | None = None) -> ValidationReport:
+        from .mlo_validation import validate_mlo_instance
+
+        return validate_mlo_instance(self, archetype)
+
+    def to_meta(self) -> dict[str, Any]:
+        data = EntityDef.to_meta(self)
+        data.update(
+            {
+                "groupId": self.group_id,
+                "floorId": self.floor_id,
+                "defaultEntitySets": self.default_entity_sets,
+                "numExitPortals": self.num_exit_portals,
+                "MLOInstflags": int(self.mlo_inst_flags),
+                "_meta_name_hash": meta_name("CMloInstanceDef"),
+            }
+        )
+        return data
+
+    @classmethod
+    def from_meta(cls, value: Any) -> MloInstanceDef:
+        base = EntityDef.from_meta(value)
+        return cls(
+            **dataclass_init_values(base, EntityDef),
+            group_id=int(value.get("groupId", 0)),
+            floor_id=int(value.get("floorId", 0)),
+            default_entity_sets=list(value.get("defaultEntitySets", []) or []),
+            num_exit_portals=int(value.get("numExitPortals", 0)),
+            mlo_inst_flags=coerce_ymap_mlo_instance_flags(
+                int(value.get("MLOInstflags", 0))
+            ),
+        )
+
+
+def _entity_from_meta(value: Any):
+    if isinstance(value, dict):
+        if value.get("_meta_name") == "CMloInstanceDef":
+            return MloInstanceDef.from_meta(value)
+        if value.get("_meta_name") == "CEntityDef":
+            return EntityDef.from_meta(value)
+    return value

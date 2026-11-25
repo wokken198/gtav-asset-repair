@@ -1,0 +1,308 @@
+from __future__ import annotations
+
+import dataclasses
+from collections.abc import Sequence
+from itertools import pairwise
+from pathlib import Path
+
+from ..binary import align
+from ..common import atomic_write_bytes
+from ..game_target import GameTarget
+from ..resource import (
+    ResourceBlockSpan,
+    ResourceSections,
+    ResourceWriter,
+    build_rsc7,
+    get_resource_total_page_count,
+    layout_resource_sections,
+)
+from ..vector import Vector3
+from ..ydr import YdrBuild
+from ..ydr.builder import (
+    _ROOT_SIZE,
+    _prepare_embedded_texture_dictionary,
+    _write_drawable_payload,
+)
+from ..ydr.gen9 import ShaderGen9Library, load_gen9_shader_library
+from ..ydr.prepare import (
+    PreparedLods,
+    PreparedMaterial,
+    compute_model_collection_bounds,
+    prepare_build,
+)
+from ..ydr.shaders import ShaderLibrary, load_shader_library
+from ..ydr.write_buffers import GraphicsWriter
+from ..ydr.write_drawable import pages_info_length, write_pages_info
+from ..ydr.write_materials import prepare_materials
+from .model import Ydd, YddDrawable, YddDrawableCollection, _coerce_drawable_input
+from .runtime_headers import (
+    YddRuntimeContext,
+    YddRuntimeProfile,
+    get_ydd_runtime_profile_for_version,
+    resolve_ydd_runtime_profile,
+)
+
+_DAT_VIRTUAL_BASE = 0x50000000
+_DRAWABLE_DICTIONARY_ROOT_SIZE = 0x40
+
+
+def _virtual(offset: int) -> int:
+    return _DAT_VIRTUAL_BASE + int(offset)
+
+
+@dataclasses.dataclass(slots=True)
+class _PreparedYddDrawable:
+    name_hash: int
+    build: YdrBuild
+    materials: list[PreparedMaterial]
+    lods: PreparedLods
+    texture_sections: ResourceSections | None
+    geometry_bounds: tuple[Vector3, Vector3, Vector3, float]
+
+
+def _drawable_build(entry: YddDrawable, *, version: int) -> YdrBuild:
+    name = entry.name or f"hash_{entry.name_hash:08X}"
+    drawable = entry.drawable
+    if isinstance(drawable, YdrBuild):
+        build = drawable
+    else:
+        build = drawable.to_build(name=name)
+    if build.name and int(build.version) == int(version):
+        return build
+    return dataclasses.replace(build, name=build.name or name, version=int(version))
+
+
+def _prepare_ydd_drawables(
+    entries: Sequence[YddDrawable],
+    *,
+    version: int,
+    shader_library: ShaderLibrary,
+    enhanced: bool,
+    gen9_library: ShaderGen9Library | None,
+    generate_normals: bool,
+    generate_tangents: bool,
+    fill_vertex_colours: bool,
+) -> list[_PreparedYddDrawable]:
+    prepared: list[_PreparedYddDrawable] = []
+    for entry in entries:
+        build = _drawable_build(entry, version=version)
+        if build.model_count == 0:
+            raise ValueError(f"YDD drawable '{entry.name}' has no models")
+        materials, lods = prepare_build(
+            build,
+            shader_library,
+            prepare_materials=(
+                lambda *args, **kwargs: prepare_materials(
+                    *args,
+                    enhanced=enhanced,
+                    gen9_library=gen9_library,
+                    **kwargs,
+                )
+            ),
+            generate_normals=generate_normals,
+            generate_tangents=generate_tangents,
+            fill_vertex_colours=fill_vertex_colours,
+        )
+        prepared.append(
+            _PreparedYddDrawable(
+                name_hash=int(entry.name_hash) & 0xFFFFFFFF,
+                build=build,
+                materials=materials,
+                lods=lods,
+                texture_sections=_prepare_embedded_texture_dictionary(build, enhanced=enhanced),
+                geometry_bounds=compute_model_collection_bounds(
+                    [model for models in lods.values() for model in models],
+                    skeleton=build.skeleton,
+                ),
+            )
+        )
+    return prepared
+
+
+def _write_drawable_dictionary_root(
+    system: ResourceWriter,
+    *,
+    page_counts: tuple[int, int],
+    hashes: Sequence[int],
+    drawable_root_offsets: Sequence[int],
+    dictionary_vft: int,
+) -> None:
+    count = len(drawable_root_offsets)
+    pages_info_off = system.alloc(pages_info_length(page_counts), 16)
+    write_pages_info(system, pages_info_off, page_counts)
+
+    hashes_off = system.alloc(count * 4, 4, relocate_pointers=False) if count else 0
+    for index, name_hash in enumerate(hashes):
+        system.pack_into("I", hashes_off + index * 4, int(name_hash) & 0xFFFFFFFF)
+
+    drawable_ptrs_off = system.alloc(count * 8, 8) if count else 0
+    for index, root_off in enumerate(drawable_root_offsets):
+        system.pack_into("Q", drawable_ptrs_off + index * 8, _virtual(root_off))
+
+    system.pack_into("I", 0x00, int(dictionary_vft))
+    system.pack_into("I", 0x04, 1)
+    system.pack_into("Q", 0x08, _virtual(pages_info_off))
+    system.pack_into("Q", 0x10, 0)
+    system.pack_into("Q", 0x18, 1)
+    system.pack_into("Q", 0x20, _virtual(hashes_off) if hashes_off else 0)
+    system.pack_into("H", 0x28, count)
+    system.pack_into("H", 0x2A, count)
+    system.pack_into("I", 0x2C, 0)
+    system.pack_into("Q", 0x30, _virtual(drawable_ptrs_off) if drawable_ptrs_off else 0)
+    system.pack_into("H", 0x38, count)
+    system.pack_into("H", 0x3A, count)
+    system.pack_into("I", 0x3C, 0)
+
+
+def _build_ydd_payload(
+    prepared: Sequence[_PreparedYddDrawable],
+    *,
+    page_counts: tuple[int, int],
+    profile: YddRuntimeProfile,
+) -> tuple[bytes, bytes, list[ResourceBlockSpan], list[ResourceBlockSpan]]:
+    system = ResourceWriter(initial_size=align(_DRAWABLE_DICTIONARY_ROOT_SIZE, 16))
+    graphics = GraphicsWriter()
+    root_offsets: list[int] = []
+
+    for item in prepared:
+        root_off = system.alloc(_ROOT_SIZE, 16)
+        root_offsets.append(root_off)
+        _write_drawable_payload(
+            system,
+            graphics,
+            item.build,
+            item.materials,
+            item.lods,
+            page_counts,
+            root_off=root_off,
+            geometry_bounds=item.geometry_bounds,
+            texture_sections=item.texture_sections,
+            drawable_file_vft=profile.drawable_headers.drawable,
+            write_pages=False,
+            runtime_headers=profile.drawable_headers,
+            enhanced=profile.game is GameTarget.GTA5_ENHANCED,
+        )
+
+    _write_drawable_dictionary_root(
+        system,
+        page_counts=page_counts,
+        hashes=[item.name_hash for item in prepared],
+        drawable_root_offsets=root_offsets,
+        dictionary_vft=profile.dictionary_vft,
+    )
+    return system.finish(), graphics.finish(), system.block_spans, graphics.block_spans
+
+
+def create_ydd(
+    drawables: YddDrawableCollection,
+    *,
+    name: str = "",
+    game: str | GameTarget | None = None,
+    version: int | None = None,
+    runtime_context: str | YddRuntimeContext | None = None,
+    runtime_profile: YddRuntimeProfile | None = None,
+) -> Ydd:
+    profile = resolve_ydd_runtime_profile(
+        game=game,
+        version=version,
+        context=runtime_context,
+        runtime_profile=runtime_profile,
+    )
+    ydd = Ydd(
+        version=profile.version,
+        path=name,
+        runtime_profile=profile,
+    )
+    ydd.with_drawables(drawables)
+    return ydd
+
+
+def build_ydd_bytes(
+    source: Ydd | YddDrawableCollection,
+    *,
+    shader_library: ShaderLibrary | None = None,
+    generate_normals: bool = True,
+    generate_tangents: bool = True,
+    fill_vertex_colours: bool = True,
+) -> bytes:
+    ydd = source if isinstance(source, Ydd) else create_ydd(source)
+    if not ydd.drawables:
+        raise ValueError("YDD writer requires at least one drawable")
+
+    profile = ydd.runtime_profile or get_ydd_runtime_profile_for_version(ydd.version)
+    if int(profile.version) != int(ydd.version):
+        raise ValueError(
+            f"YDD runtime profile version {profile.version} does not match "
+            f"resource version {ydd.version}"
+        )
+    enhanced = profile.game is GameTarget.GTA5_ENHANCED
+    active_shader_library = shader_library if shader_library is not None else load_shader_library()
+    gen9_library = load_gen9_shader_library() if enhanced else None
+    prepared = _prepare_ydd_drawables(
+        [_coerce_drawable_input(entry, index) for index, entry in enumerate(ydd.drawables)],
+        version=int(ydd.version),
+        shader_library=active_shader_library,
+        enhanced=enhanced,
+        gen9_library=gen9_library,
+        generate_normals=generate_normals,
+        generate_tangents=generate_tangents,
+        fill_vertex_colours=fill_vertex_colours,
+    )
+    prepared.sort(key=lambda item: item.name_hash)
+    for previous, current in pairwise(prepared):
+        if previous.name_hash == current.name_hash:
+            raise ValueError(
+                f"YDD writer requires unique drawable hashes; "
+                f"0x{current.name_hash:08X} is duplicated"
+            )
+
+    page_counts = (0, 0)
+    system_flags = None
+    graphics_flags = None
+    system_data = b""
+    graphics_data = b""
+    for _ in range(16):
+        system_data, graphics_data, system_blocks, graphics_blocks = _build_ydd_payload(
+            prepared,
+            page_counts=page_counts,
+            profile=profile,
+        )
+        system_data, graphics_data, system_flags, graphics_flags = layout_resource_sections(
+            system_data,
+            system_blocks,
+            graphics_data,
+            graphics_blocks,
+            version=int(ydd.version),
+        )
+        next_counts = (get_resource_total_page_count(system_flags), get_resource_total_page_count(graphics_flags))
+        if next_counts == page_counts:
+            break
+        page_counts = next_counts
+    else:
+        raise RuntimeError("YDD builder page-info sizing did not converge")
+
+    assert system_flags is not None
+    assert graphics_flags is not None
+    return build_rsc7(
+        system_data,
+        version=int(ydd.version),
+        graphics_data=graphics_data,
+        system_alignment=0x200,
+        graphics_alignment=0x200,
+        system_flags=system_flags,
+        graphics_flags=graphics_flags,
+    )
+
+
+def save_ydd(source: Ydd | YddDrawableCollection, destination: str | Path, *, shader_library: ShaderLibrary | None = None) -> Path:
+    return atomic_write_bytes(
+        destination,
+        build_ydd_bytes(source, shader_library=shader_library),
+    )
+
+
+__all__ = [
+    "build_ydd_bytes",
+    "create_ydd",
+    "save_ydd",
+]

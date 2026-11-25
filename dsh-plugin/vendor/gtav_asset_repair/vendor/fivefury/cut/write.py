@@ -1,0 +1,565 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from ..binary import (
+    pack_f32_be as _f32,
+)
+from ..binary import (
+    pack_i32_be as _i32,
+)
+from ..binary import (
+    pack_i64_be as _i64,
+)
+from ..binary import (
+    pack_u16_be as _u16,
+)
+from ..binary import (
+    pack_u32_be as _u32,
+)
+from ..common import atomic_write_bytes, hash_value
+from ..pso import (
+    CHKS,
+    PSCH,
+    PSIG,
+    STRE,
+    PsoDataTypeBool,
+    PsoDataTypeFloat,
+    PsoDataTypeFloat2,
+    PsoDataTypeFloat3,
+    PsoDataTypeFloat3a,
+    PsoDataTypeFloat4,
+    PsoDataTypeFloat4a,
+    PsoDataTypeSByte,
+    PsoDataTypeSInt,
+    PsoDataTypeString,
+    PsoDataTypeStructure,
+    PsoDataTypeUByte,
+    PsoDataTypeUInt,
+    PsoDataTypeUShort,
+    build_chks_section,
+    build_pmap_section,
+    build_psin_section,
+    finalize_sections_with_checksum,
+    patch_pointers,
+)
+from ..pso import (
+    PsoBlockBuilder as _BlockBuilder,
+)
+from ..pso import (
+    PsoEntry as _PsoEntry,
+)
+from ..pso import (
+    PsoPointerPatch as _Patch,
+)
+from ..pso import (
+    PsoStruct as _PsoStruct,
+)
+from ..pso import model as pso_model
+from ..pso.schema import serialize_psch as _serialize_psch
+from ..vector import Quaternion, Vector2, Vector3, Vector4
+from .limits import CUT_MAX_PSO_ARRAY_ITEMS
+from .model import CutFile, CutHashedString, CutNode
+from .names import ARRAY_INFO_HASH, CUT_HASH_NAMES, CUT_NAME_VALUES
+from .schema import BUILTIN_CUT_STRUCTS, builtin_cut_template
+
+
+def _resolve_hash(value: int | str | CutHashedString | None) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, CutHashedString):
+        return value.hash
+    if isinstance(value, int):
+        return value
+    if value.startswith("hash_") and len(value) == 13:
+        return int(value[5:], 16)
+    if value in CUT_NAME_VALUES:
+        return CUT_NAME_VALUES[value]
+    return hash_value(value)
+
+
+def _string_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, CutHashedString):
+        return value.text or str(value)
+    return str(value)
+
+
+def _ensure_vector(value: Any, size: int) -> tuple[float, ...]:
+    if value is None:
+        return (0.0,) * size
+    expected: type[Vector2 | Vector3] | tuple[type[Vector4], type[Quaternion]]
+    match size:
+        case 2:
+            expected = Vector2
+        case 3:
+            expected = Vector3
+        case 4:
+            expected = (Vector4, Quaternion)
+        case _:
+            raise ValueError(f"unsupported vector size {size}")
+    if not isinstance(value, expected):
+        names = (
+            " or ".join(item.__name__ for item in expected)
+            if isinstance(expected, tuple)
+            else expected.__name__
+        )
+        raise TypeError(f"PSO Float{size} requires {names}, got {type(value).__name__}")
+    return value.as_tuple()
+
+
+class _CutWriter:
+    def __init__(self, cut: CutFile, template: dict[str, Any]):
+        self.cut = cut
+        self.template = template
+        self.structs: dict[int, _PsoStruct] = template["structs"]
+        self.root_type_hash: int = template["root_type_hash"]
+        self.blocks: dict[int, _BlockBuilder] = {}
+        self.patches: list[_Patch] = []
+
+    def _get_block(self, name_hash: int) -> _BlockBuilder:
+        block = self.blocks.get(name_hash)
+        if block is None:
+            block = _BlockBuilder(name_hash=name_hash)
+            self.blocks[name_hash] = block
+        return block
+
+    def _record_pointer_patch(self, buffer: bytearray, offset: int, block_hash: int, relative_offset: int) -> None:
+        self.patches.append(_Patch(buffer=buffer, offset=offset, block_hash=block_hash, relative_offset=relative_offset))
+
+    def _alloc_string(self, value: str) -> tuple[int, int]:
+        payload = value.encode("utf-8") + b"\x00"
+        block = self._get_block(PsoDataTypeSByte)
+        return block.name_hash, block.append(payload)
+
+    def _alloc_primitive_array(self, type_id: int, values: list[Any]) -> tuple[int, int]:
+        payload = bytearray()
+        match type_id:
+            case pso_model.PsoDataTypeSInt:
+                for value in values:
+                    payload.extend(_i32(int(value)))
+            case pso_model.PsoDataTypeUInt:
+                for value in values:
+                    payload.extend(_u32(int(value)))
+            case pso_model.PsoDataTypeUShort:
+                for value in values:
+                    payload.extend(_u16(int(value)))
+            case pso_model.PsoDataTypeUByte:
+                payload.extend(int(value) & 0xFF for value in values)
+            case pso_model.PsoDataTypeBool:
+                payload.extend(1 if value else 0 for value in values)
+            case pso_model.PsoDataTypeFloat:
+                for value in values:
+                    payload.extend(_f32(float(value)))
+            case pso_model.PsoDataTypeFloat2:
+                for value in values:
+                    x, y = _ensure_vector(value, 2)
+                    payload.extend(_f32(x))
+                    payload.extend(_f32(y))
+            case pso_model.PsoDataTypeFloat3 | pso_model.PsoDataTypeFloat3a:
+                for value in values:
+                    x, y, z = _ensure_vector(value, 3)
+                    payload.extend(_f32(x))
+                    payload.extend(_f32(y))
+                    payload.extend(_f32(z))
+                    if type_id == PsoDataTypeFloat3:
+                        payload.extend(b"\x00\x00\x00\x00")
+            case pso_model.PsoDataTypeFloat4 | pso_model.PsoDataTypeFloat4a:
+                for value in values:
+                    x, y, z, w = _ensure_vector(value, 4)
+                    payload.extend(_f32(x))
+                    payload.extend(_f32(y))
+                    payload.extend(_f32(z))
+                    payload.extend(_f32(w))
+            case _:
+                raise ValueError(f"unsupported primitive array type {type_id}")
+        block = self._get_block(type_id)
+        return block.name_hash, block.append(bytes(payload))
+
+    def _write_scalar(self, buffer: bytearray, offset: int, type_id: int, value: Any) -> None:
+        match type_id:
+            case pso_model.PsoDataTypeBool:
+                buffer[offset] = 1 if bool(value) else 0
+            case pso_model.PsoDataTypeSByte:
+                buffer[offset : offset + 1] = int(value or 0).to_bytes(
+                    1, "big", signed=True
+                )
+            case pso_model.PsoDataTypeUByte:
+                buffer[offset] = int(value or 0) & 0xFF
+            case pso_model.PsoDataTypeSShort:
+                buffer[offset : offset + 2] = int(value or 0).to_bytes(
+                    2, "big", signed=True
+                )
+            case pso_model.PsoDataTypeUShort:
+                buffer[offset : offset + 2] = _u16(int(value or 0))
+            case (
+                pso_model.PsoDataTypeSInt
+                | pso_model.PsoDataTypeEnum
+                | pso_model.PsoDataTypeFlags
+            ):
+                buffer[offset : offset + 4] = _i32(int(value or 0))
+            case pso_model.PsoDataTypeUInt:
+                buffer[offset : offset + 4] = _u32(int(value or 0))
+            case pso_model.PsoDataTypeFloat:
+                buffer[offset : offset + 4] = _f32(float(value or 0.0))
+            case pso_model.PsoDataTypeFloat2:
+                x, y = _ensure_vector(value, 2)
+                buffer[offset : offset + 8] = _f32(x) + _f32(y)
+            case pso_model.PsoDataTypeFloat3 | pso_model.PsoDataTypeFloat3a:
+                x, y, z = _ensure_vector(value, 3)
+                payload = _f32(x) + _f32(y) + _f32(z)
+                if type_id == PsoDataTypeFloat3:
+                    payload += b"\x00\x00\x00\x00"
+                buffer[offset : offset + len(payload)] = payload
+            case pso_model.PsoDataTypeFloat4 | pso_model.PsoDataTypeFloat4a:
+                x, y, z, w = _ensure_vector(value, 4)
+                buffer[offset : offset + 16] = (
+                    _f32(x) + _f32(y) + _f32(z) + _f32(w)
+                )
+            case pso_model.PsoDataTypeHFloat:
+                buffer[offset : offset + 2] = _u16(int(value or 0))
+            case pso_model.PsoDataTypeLong:
+                buffer[offset : offset + 8] = _i64(int(value or 0))
+            case _:
+                raise ValueError(f"unsupported scalar type {type_id}")
+
+    def _write_string(self, buffer: bytearray, offset: int, entry: _PsoEntry, value: Any) -> None:
+        if entry.subtype == 0:
+            length = (entry.reference_key >> 16) & 0xFFFF
+            text = "" if value is None else str(value)
+            payload = text.encode("utf-8")[: max(0, length - 1)] + b"\x00"
+            payload = payload.ljust(length, b"\x00")
+            buffer[offset : offset + length] = payload
+            return
+        if entry.subtype in {1, 2}:
+            if value is None or value == "":
+                return
+            _, rel = self._alloc_string(_string_value(value))
+            self._record_pointer_patch(buffer, offset, PsoDataTypeSByte, rel)
+            return
+        if entry.subtype == 3:
+            if value is None or value == "":
+                return
+            text_value = _string_value(value)
+            block_hash, rel = self._alloc_string(text_value)
+            self._record_pointer_patch(buffer, offset, block_hash, rel)
+            count = len(text_value.encode("utf-8")) + 1
+            buffer[offset + 8 : offset + 10] = _u16(count)
+            buffer[offset + 10 : offset + 12] = _u16(count)
+            return
+        if entry.subtype in {7, 8}:
+            buffer[offset : offset + 4] = _u32(_resolve_hash(value))
+            return
+        raise ValueError(f"unsupported string subtype {entry.subtype}")
+
+    def _coerce_node(self, value: Any, fallback_type_hash: int) -> CutNode:
+        if isinstance(value, CutNode):
+            return value
+        if isinstance(value, dict):
+            return CutNode(type_name=f"hash_{fallback_type_hash:08X}", type_hash=fallback_type_hash, fields=dict(value))
+        raise TypeError(f"expected CutNode or dict, got {type(value)!r}")
+
+    def _resolve_dynamic_type_hash(self, node: CutNode, *, context: str) -> int:
+        type_hash = node.type_hash if node.type_hash not in {None, 0} else CUT_NAME_VALUES.get(node.type_name)
+        if type_hash in {None, 0}:
+            raise ValueError(f"missing dynamic cut type hash for {context}: {node.type_name!r}")
+        if type_hash not in self.structs:
+            raise ValueError(
+                f"unknown dynamic cut type hash 0x{type_hash:08X} for {context}: {node.type_name!r}"
+            )
+        return type_hash
+
+    def _write_inline_structure(self, struct_hash: int, value: Any) -> bytes:
+        node = self._coerce_node(value or {}, struct_hash)
+        return self._serialize_structure(struct_hash, node)
+
+    def _alloc_structure(self, struct_hash: int, value: Any) -> tuple[int, int]:
+        node = self._coerce_node(value or {}, struct_hash)
+        patch_start = len(self.patches)
+        payload = self._serialize_structure(struct_hash, node)
+        block = self._get_block(struct_hash)
+        rel = block.append(payload)
+        for patch in self.patches[patch_start:]:
+            if patch.buffer is payload:
+                patch.buffer = block.data
+                patch.offset += rel
+        return block.name_hash, rel
+
+    def _write_external_array_header(self, buffer: bytearray, offset: int, block_hash: int, relative_offset: int, count: int) -> None:
+        self._record_pointer_patch(buffer, offset, block_hash, relative_offset)
+        buffer[offset + 8 : offset + 10] = _u16(count)
+        buffer[offset + 10 : offset + 12] = _u16(count)
+
+    def _write_array(self, buffer: bytearray, offset: int, entry: _PsoEntry, array_info: _PsoEntry | None, value: Any) -> None:
+        values = list(value or [])
+        if array_info is None:
+            return
+        if entry.subtype in {1, 2, 4}:
+            capacity = (entry.reference_key >> 16) & 0xFFFF
+            if len(values) > capacity:
+                field_name = CUT_HASH_NAMES.get(entry.name_hash, f"0x{entry.name_hash:08X}")
+                raise ValueError(f"CUT array '{field_name}' has {len(values)} items; capacity is {capacity}")
+            if array_info.type_id == PsoDataTypeStructure and array_info.reference_key != 0:
+                struct_info = self.structs[array_info.reference_key]
+                stride = struct_info.length
+                for index in range(capacity):
+                    chunk = self._write_inline_structure(array_info.reference_key, values[index] if index < len(values) else {})
+                    start = offset + index * stride
+                    buffer[start : start + stride] = chunk
+                return
+            if array_info.type_id == PsoDataTypeUInt:
+                for index in range(capacity):
+                    value = values[index] if index < len(values) else 0
+                    start = offset + index * 4
+                    buffer[start : start + 4] = _u32(int(value))
+                return
+            if array_info.type_id == PsoDataTypeSInt:
+                for index in range(capacity):
+                    value = values[index] if index < len(values) else 0
+                    start = offset + index * 4
+                    buffer[start : start + 4] = _i32(int(value))
+                return
+            if array_info.type_id == PsoDataTypeFloat:
+                for index in range(capacity):
+                    value = values[index] if index < len(values) else 0.0
+                    start = offset + index * 4
+                    buffer[start : start + 4] = _f32(float(value))
+                return
+            if array_info.type_id == PsoDataTypeFloat2:
+                for index in range(capacity):
+                    value = values[index] if index < len(values) else (0.0, 0.0)
+                    x, y = _ensure_vector(value, 2)
+                    start = offset + index * 8
+                    buffer[start : start + 8] = _f32(x) + _f32(y)
+                return
+            if array_info.type_id in {PsoDataTypeFloat3, PsoDataTypeFloat3a}:
+                stride = 16 if array_info.type_id == PsoDataTypeFloat3 else 12
+                for index in range(capacity):
+                    value = values[index] if index < len(values) else (0.0, 0.0, 0.0)
+                    x, y, z = _ensure_vector(value, 3)
+                    payload = _f32(x) + _f32(y) + _f32(z)
+                    if array_info.type_id == PsoDataTypeFloat3:
+                        payload += b"\x00\x00\x00\x00"
+                    start = offset + index * stride
+                    buffer[start : start + stride] = payload
+                return
+            if array_info.type_id in {PsoDataTypeFloat4, PsoDataTypeFloat4a}:
+                for index in range(capacity):
+                    value = values[index] if index < len(values) else (0.0, 0.0, 0.0, 0.0)
+                    x, y, z, w = _ensure_vector(value, 4)
+                    start = offset + index * 16
+                    buffer[start : start + 16] = _f32(x) + _f32(y) + _f32(z) + _f32(w)
+                return
+            if array_info.type_id == PsoDataTypeUShort:
+                for index in range(capacity):
+                    value = values[index] if index < len(values) else 0
+                    start = offset + index * 2
+                    buffer[start : start + 2] = _u16(int(value))
+                return
+            if array_info.type_id == PsoDataTypeUByte:
+                for index in range(capacity):
+                    buffer[offset + index] = int(values[index] if index < len(values) else 0) & 0xFF
+                return
+            if array_info.type_id == PsoDataTypeBool:
+                for index in range(capacity):
+                    buffer[offset + index] = 1 if bool(values[index] if index < len(values) else False) else 0
+                return
+            raise ValueError("unsupported inline array shape")
+
+        if len(values) > CUT_MAX_PSO_ARRAY_ITEMS:
+            field_name = CUT_HASH_NAMES.get(entry.name_hash, f"0x{entry.name_hash:08X}")
+            raise ValueError(
+                f"CUT array '{field_name}' has {len(values)} items; maximum is {CUT_MAX_PSO_ARRAY_ITEMS}"
+            )
+        if not values:
+            return
+
+        if array_info.type_id == PsoDataTypeStructure:
+            if array_info.reference_key != 0:
+                block_hash = array_info.reference_key
+                first_rel: int | None = None
+                for item in values:
+                    _, rel = self._alloc_structure(block_hash, item)
+                    if first_rel is None:
+                        first_rel = rel
+                self._write_external_array_header(buffer, offset, block_hash, first_rel or 0, len(values))
+                return
+
+            pointer_payload = bytearray()
+            pointer_patch_specs: list[tuple[int, int, int]] = []
+            for index, item in enumerate(values):
+                node = self._coerce_node(item, 0)
+                type_hash = self._resolve_dynamic_type_hash(node, context=f"array item {index}")
+                _, rel = self._alloc_structure(type_hash, node)
+                pointer_payload.extend(_u32(0))
+                pointer_payload.extend(b"\x00\x00\x00\x00")
+                pointer_patch_specs.append((len(pointer_payload) - 8, type_hash, rel))
+            pointer_block = self._get_block(PsoDataTypeStructure)
+            pointer_rel = pointer_block.append(bytes(pointer_payload))
+            for patch_offset, type_hash, rel in pointer_patch_specs:
+                self.patches.append(_Patch(pointer_block.data, pointer_rel + patch_offset, type_hash, rel))
+            self._write_external_array_header(buffer, offset, PsoDataTypeStructure, pointer_rel, len(values))
+            return
+
+        if array_info.type_id == PsoDataTypeString:
+            if array_info.subtype in {7, 8}:
+                block_hash, rel = self._alloc_primitive_array(PsoDataTypeUInt, [_resolve_hash(item) for item in values])
+                self._write_external_array_header(buffer, offset, block_hash, rel, len(values))
+                return
+            if array_info.subtype in {2, 3}:
+                stride = 8 if array_info.subtype == 2 else 16
+                headers = bytearray(stride * len(values))
+                string_patches: list[tuple[int, int, int]] = []
+                for index, item in enumerate(values):
+                    text_value = _string_value(item)
+                    block_hash, string_rel = self._alloc_string(text_value)
+                    item_offset = index * stride
+                    string_patches.append((item_offset, block_hash, string_rel))
+                    if array_info.subtype == 3:
+                        count = len(text_value.encode("utf-8")) + 1
+                        headers[item_offset + 8 : item_offset + 10] = _u16(count)
+                        headers[item_offset + 10 : item_offset + 12] = _u16(count)
+                array_block = self._get_block(PsoDataTypeString)
+                array_rel = array_block.append(bytes(headers))
+                for patch_offset, block_hash, string_rel in string_patches:
+                    self.patches.append(_Patch(array_block.data, array_rel + patch_offset, block_hash, string_rel))
+                self._write_external_array_header(buffer, offset, PsoDataTypeString, array_rel, len(values))
+                return
+            raise ValueError("unsupported string array subtype")
+
+        block_hash, rel = self._alloc_primitive_array(array_info.type_id, values)
+        self._write_external_array_header(buffer, offset, block_hash, rel, len(values))
+
+    def _serialize_structure(self, type_hash: int, node: CutNode) -> bytearray:
+        struct_info = self.structs[type_hash]
+        buffer = bytearray(struct_info.length)
+        array_info: _PsoEntry | None = None
+        for entry in struct_info.entries:
+            if entry.name_hash == ARRAY_INFO_HASH:
+                array_info = entry
+                continue
+            value = node.fields.get(CUT_HASH_NAMES.get(entry.name_hash, f"hash_{entry.name_hash:08X}"))
+            if value is None:
+                value = node.fields.get(f"hash_{entry.name_hash:08X}")
+            offset = entry.data_offset
+            match entry.type_id:
+                case pso_model.PsoDataTypeString:
+                    self._write_string(buffer, offset, entry, value)
+                case pso_model.PsoDataTypeStructure:
+                    match entry.subtype:
+                        case 0:
+                            child = self._write_inline_structure(
+                                entry.reference_key, value
+                            )
+                            buffer[offset : offset + len(child)] = child
+                        case 3 | 4:
+                            if value is None:
+                                continue
+                            child_node = self._coerce_node(
+                                value, entry.reference_key
+                            )
+                            block_hash = (
+                                entry.reference_key
+                                if entry.reference_key not in {None, 0}
+                                else self._resolve_dynamic_type_hash(
+                                    child_node,
+                                    context=(
+                                        "pointer field "
+                                        f"{CUT_HASH_NAMES.get(entry.name_hash, f'hash_{entry.name_hash:08X}')}"
+                                    ),
+                                )
+                            )
+                            block_hash, rel = self._alloc_structure(
+                                block_hash, child_node
+                            )
+                            self._record_pointer_patch(
+                                buffer, offset, block_hash, rel
+                            )
+                        case _:
+                            raise ValueError(
+                                f"unsupported structure subtype {entry.subtype}"
+                            )
+                case pso_model.PsoDataTypeArray:
+                    self._write_array(buffer, offset, entry, array_info, value)
+                case _:
+                    self._write_scalar(buffer, offset, entry.type_id, value)
+        return buffer
+
+    def _ordered_blocks(self) -> list[_BlockBuilder]:
+        preferred = list(self.template.get("block_order_hashes", []))
+        ordered_hashes: list[int] = []
+        for name_hash in preferred:
+            if name_hash in self.blocks and name_hash not in ordered_hashes:
+                ordered_hashes.append(name_hash)
+        for name_hash in self.blocks:
+            if name_hash not in ordered_hashes:
+                ordered_hashes.append(name_hash)
+        return [self.blocks[name_hash] for name_hash in ordered_hashes]
+
+    def build(self) -> bytes:
+        self._alloc_structure(self.root_type_hash, self.cut.root)
+        ordered_blocks = self._ordered_blocks()
+        block_ids = {block.name_hash: index + 1 for index, block in enumerate(ordered_blocks)}
+
+        patch_pointers(self.patches, block_ids)
+        psin = build_psin_section(ordered_blocks, self.template.get("psin_prefix", b"\x70" * 8))
+        root_block_id = block_ids[self.root_type_hash]
+        pmap = build_pmap_section(ordered_blocks, root_block_id, self.template.get("pmap_unknown", 0x7070))
+
+        sections = [psin, pmap]
+        template_sections: dict[int, bytes] = self.template["sections"]
+        for ident in (PSCH, PSIG, STRE):
+            section = template_sections.get(ident)
+            if section is not None:
+                sections.append(section)
+
+        sections.append(build_chks_section(template_sections.get(CHKS)))
+        return finalize_sections_with_checksum(sections)
+
+
+def _resolve_template(template: CutFile | bytes | str | Path | None, cut: CutFile) -> dict[str, Any]:
+    def _merge_builtin_structs(resolved: dict[str, Any]) -> dict[str, Any]:
+        structs = dict(resolved.get("structs", {}))
+        changed = False
+        for type_hash, struct_info in BUILTIN_CUT_STRUCTS.items():
+            if type_hash not in structs:
+                structs[type_hash] = struct_info
+                changed = True
+        if not changed:
+            return resolved
+        sections = dict(resolved.get("sections", {}))
+        sections[PSCH] = _serialize_psch(structs)
+        merged = dict(resolved)
+        merged["structs"] = structs
+        merged["sections"] = sections
+        return merged
+
+    if template is None:
+        resolved = cut.metadata.get("pso_template")
+        if resolved is not None:
+            return _merge_builtin_structs(resolved)
+        return builtin_cut_template()
+    if isinstance(template, CutFile):
+        resolved = template.metadata.get("pso_template")
+        if resolved is None:
+            raise ValueError("template CutFile has no PSO metadata; load it from a .cut first")
+        return _merge_builtin_structs(resolved)
+    from .pso import read_cut
+
+    return _resolve_template(read_cut(template), cut)
+
+
+def build_cut_bytes(cut: CutFile, *, template: CutFile | bytes | str | Path | None = None) -> bytes:
+    resolved_template = _resolve_template(template, cut)
+    return _CutWriter(cut, resolved_template).build()
+
+
+def save_cut(
+    cut: CutFile,
+    destination: str | Path,
+    *,
+    template: CutFile | bytes | str | Path | None = None,
+) -> Path:
+    return atomic_write_bytes(destination, build_cut_bytes(cut, template=template))

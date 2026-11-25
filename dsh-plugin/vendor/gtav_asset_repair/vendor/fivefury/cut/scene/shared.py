@@ -1,0 +1,337 @@
+from __future__ import annotations
+
+from bisect import bisect_right
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any
+
+from ...common import hash_value
+from ...vector import Quaternion, Vector2, Vector3, Vector4
+from ..limits import CUT_FPS
+from ..model import CutHashedString, CutNode, CutResolvedEvent
+from ..names import CUT_NAME_VALUES
+from ..payloads import CutEventPayload
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .bindings import CutBinding
+
+
+_OBJECT_ROLE_MAP = {
+    "rage__cutfCameraObject": "camera",
+    "rage__cutfPedModelObject": "ped",
+    "rage__cutfPropModelObject": "prop",
+    "rage__cutfVehicleModelObject": "vehicle",
+    "rage__cutfWeaponModelObject": "weapon",
+    "rage__cutfHiddenModelObject": "hidden_object",
+    "rage__cutfFixupModelObject": "fixup_object",
+    "rage__cutfOverlayObject": "overlay",
+    "rage__cutfDecalObject": "decal",
+    "rage__cutfBlockingBoundsObject": "blocking_bounds",
+    "rage__cutfRemovalBoundsObject": "removal_bounds",
+    "rage__cutfLightObject": "light",
+    "rage__cutfAnimatedLightObject": "light",
+    "rage__cutfParticleEffectObject": "particle_fx",
+    "rage__cutfAnimatedParticleEffectObject": "particle_fx",
+    "rage__cutfRayfireObject": "rayfire",
+    "rage__cutfEventObject": "event_object",
+    "rage__cutfAudioObject": "audio",
+    "rage__cutfSubtitleObject": "subtitle",
+    "rage__cutfScreenFadeObject": "fade",
+    "rage__cutfAnimationManagerObject": "animation_manager",
+    "rage__cutfAssetManagerObject": "asset_manager",
+}
+
+_ARGS_CATEGORY_MAP = {
+    "rage__cutfCameraCutEventArgs": "camera_cut",
+    "rage__cutfSubtitleEventArgs": "subtitle",
+    "rage__cutfLoadSceneEventArgs": "load_scene",
+    "rage__cutfObjectIdListEventArgs": "object_group",
+    "rage__cutfObjectIdEventArgs": "object_ref",
+    "rage__cutfObjectVariationEventArgs": "object_variation",
+    "rage__cutfVehicleVariationEventArgs": "vehicle_variation",
+    "rage__cutfVehicleExtraEventArgs": "vehicle_extras",
+    "rage__cutfObjectIdNameEventArgs": "object_named",
+    "rage__cutfAttachmentEventArgs": "object_attachment",
+    "rage__cutfTwoFloatValuesEventArgs": "float_pair",
+    "rage__cutfNameEventArgs": "named",
+    "rage__cutfFinalNameEventArgs": "named",
+    "rage__cutfCascadeShadowEventArgs": "camera_fx",
+    "rage__cutfFloatValueEventArgs": "camera_fx",
+    "rage__cutfBoolValueEventArgs": "camera_fx",
+}
+
+_EVENT_BASE_FIELDS = {"fTime", "iEventId", "iEventArgsIndex", "pChildEvents", "StickyId", "IsChild", "iObjectId"}
+_ARGS_BASE_FIELDS = {"attributeList", "cutfAttributes"}
+
+_ROLE_DEFAULT_OBJECT_TYPE = {
+    "camera": "rage__cutfCameraObject",
+    "ped": "rage__cutfPedModelObject",
+    "prop": "rage__cutfPropModelObject",
+    "vehicle": "rage__cutfVehicleModelObject",
+    "weapon": "rage__cutfWeaponModelObject",
+    "light": "rage__cutfLightObject",
+    "audio": "rage__cutfAudioObject",
+    "subtitle": "rage__cutfSubtitleObject",
+    "fade": "rage__cutfScreenFadeObject",
+    "overlay": "rage__cutfOverlayObject",
+    "decal": "rage__cutfDecalObject",
+    "hidden_object": "rage__cutfHiddenModelObject",
+    "fixup_object": "rage__cutfFixupModelObject",
+    "blocking_bounds": "rage__cutfBlockingBoundsObject",
+    "removal_bounds": "rage__cutfRemovalBoundsObject",
+    "particle_fx": "rage__cutfParticleEffectObject",
+    "rayfire": "rage__cutfRayfireObject",
+    "event_object": "rage__cutfEventObject",
+    "animation_manager": "rage__cutfAnimationManagerObject",
+    "asset_manager": "rage__cutfAssetManagerObject",
+}
+
+
+def _coerce_name(value: Any) -> str | None:
+    if isinstance(value, CutHashedString):
+        return value.text or f"0x{value.hash:08X}"
+    if isinstance(value, str):
+        return value or None
+    return None
+
+
+def _parse_hex_hash(text: str | None) -> int | None:
+    if not isinstance(text, str):
+        return None
+    value = text.strip()
+    if len(value) <= 2 or not value.lower().startswith("0x"):
+        return None
+    try:
+        return int(value, 16) & 0xFFFFFFFF
+    except ValueError:
+        return None
+
+
+def _hashed_string(text: str | None) -> CutHashedString:
+    parsed_hash = _parse_hex_hash(text)
+    if parsed_hash is not None:
+        return CutHashedString(hash=parsed_hash, text=None)
+    value = text or ""
+    return CutHashedString(hash=hash_value(value) if value else 0, text=value or None)
+
+
+def _node_type_hash(type_name: str, type_hash: int | None = None) -> int:
+    return int(type_hash if type_hash is not None else CUT_NAME_VALUES.get(type_name, hash_value(type_name)))
+
+
+def _object_name_field(type_name: str) -> str:
+    if type_name == "rage__cutfAudioObject":
+        return "cName"
+    if type_name in {
+        "rage__cutfPedModelObject",
+        "rage__cutfPropModelObject",
+        "rage__cutfVehicleModelObject",
+        "rage__cutfWeaponModelObject",
+        "rage__cutfParticleEffectObject",
+        "rage__cutfAnimatedParticleEffectObject",
+        "rage__cutfRayfireObject",
+    }:
+        return "StreamingName"
+    return "cName"
+
+
+def _event_label_field(args_type_name: str) -> str | None:
+    if args_type_name == "rage__cutfCameraCutEventArgs":
+        return "cName"
+    if args_type_name == "rage__cutfCascadeShadowEventArgs":
+        return "cameraCutHashName"
+    if args_type_name in {
+        "rage__cutfSubtitleEventArgs",
+        "rage__cutfNameEventArgs",
+        "rage__cutfFinalNameEventArgs",
+        "rage__cutfObjectIdNameEventArgs",
+    }:
+        return "cName"
+    return None
+
+
+def _uses_plain_cname(args_type_name: str | None) -> bool:
+    return args_type_name == "rage__cutfFinalNameEventArgs"
+
+
+def _coerce_event_label_value(args_type_name: str | None, field_name: str, value: str) -> str | CutHashedString:
+    if field_name == "cName" and _uses_plain_cname(args_type_name):
+        return value
+    return _hashed_string(value)
+
+
+def _clone_value(value: Any) -> Any:
+    if isinstance(value, CutNode):
+        return CutNode(type_name=value.type_name, type_hash=value.type_hash, fields={key: _clone_value(item) for key, item in value.fields.items()})
+    if isinstance(value, CutHashedString):
+        return CutHashedString(hash=value.hash, text=value.text)
+    if isinstance(value, list):
+        return [_clone_value(item) for item in value]
+    if isinstance(value, tuple):
+        if all(
+            item is None or isinstance(item, (bool, int, float, str))
+            for item in value
+        ):
+            return value
+        return tuple(_clone_value(item) for item in value)
+    if isinstance(value, dict):
+        return {key: _clone_value(item) for key, item in value.items()}
+    return value
+
+
+def _coerce_payload(value: CutEventPayload | dict[str, Any] | None) -> tuple[dict[str, Any], str | None, float | None]:
+    if value is None:
+        return {}, None, None
+    if isinstance(value, CutEventPayload):
+        return value.to_fields(), value.event_label, value.event_duration
+    return dict(value), None, None
+
+
+def _freeze_value(value: Any) -> Any:
+    if isinstance(value, CutNode):
+        return ("CutNode", value.type_name, value.type_hash, tuple(sorted((key, _freeze_value(item)) for key, item in value.fields.items())))
+    if isinstance(value, CutHashedString):
+        return ("CutHashedString", value.hash, value.text)
+    if isinstance(value, (Vector2, Vector3, Vector4, Quaternion)):
+        return (type(value).__name__, value.components)
+    if isinstance(value, list):
+        return tuple(_freeze_value(item) for item in value)
+    if isinstance(value, tuple):
+        return tuple(_freeze_value(item) for item in value)
+    if isinstance(value, dict):
+        return tuple(sorted((key, _freeze_value(item)) for key, item in value.items()))
+    return value
+
+
+def _coerce_object_id(value: CutBinding | int) -> int:
+    from .bindings import CutBinding
+
+    return value.object_id if isinstance(value, CutBinding) else int(value)
+
+
+def _coerce_object_ids(values: Iterable[CutBinding | int]) -> list[int]:
+    return [_coerce_object_id(value) for value in values]
+
+
+def _object_role(type_name: str) -> str:
+    return _OBJECT_ROLE_MAP.get(type_name, "object")
+
+
+def _is_scene_entity(role: str | None) -> bool:
+    return role in {"ped", "prop", "vehicle", "weapon", "hidden_object", "overlay", "particle_fx", "rayfire"}
+
+
+def _runtime_animation_section_index(
+    scene: Any,
+    time: float,
+    *,
+    default: int = 0,
+) -> int:
+    starts = _runtime_animation_section_starts(scene)
+    if len(starts) == 1 and starts[0] == 0.0:
+        return int(default)
+    return max(bisect_right(starts, float(time)) - 1, 0)
+
+
+def _runtime_animation_section_starts(scene: Any) -> tuple[float, ...]:
+    from .settings import CutSectioningMode, _resolved_sectioning
+
+    if not scene.settings.sectioned:
+        return (0.0,)
+    duration = float(scene.duration or 0.0)
+    mode = _resolved_sectioning(scene)
+    values: Iterable[float]
+    if mode & (CutSectioningMode.CAMERA_CUTS | CutSectioningMode.SPLIT):
+        cuts = (
+            scene.camera_cut_list
+            if mode & CutSectioningMode.CAMERA_CUTS
+            else scene.section_split_list
+        )
+        origin = float(scene.range_start or 0) / CUT_FPS
+        values = (float(value) - origin for value in cuts or ())
+    elif mode & CutSectioningMode.DURATION:
+        interval = float(scene.section_by_time_slice_duration or 0.0)
+        values = (
+            (index * interval for index in range(1, int(duration // interval) + 1))
+            if interval > 0.0
+            else ()
+        )
+    else:
+        values = ()
+    return (
+        0.0,
+        *sorted({float(value) for value in values if 0.0 < float(value) < duration}),
+    )
+
+
+def _event_category(resolved: CutResolvedEvent) -> str:
+    object_role = _object_role(resolved.object.type_name) if resolved.object is not None else None
+    if resolved.event_args is not None:
+        match resolved.event_args.type_name, object_role:
+            case ("rage__cutfNameEventArgs" | "rage__cutfFinalNameEventArgs", "audio"):
+                return "audio_cue"
+            case ("rage__cutfNameEventArgs" | "rage__cutfFinalNameEventArgs", "animation_manager"):
+                return "animation_state"
+            case ("rage__cutfNameEventArgs" | "rage__cutfFinalNameEventArgs", "asset_manager"):
+                return "asset_state"
+            case ("rage__cutfObjectIdEventArgs" | "rage__cutfObjectIdNameEventArgs", "animation_manager"):
+                return "animation_binding"
+            case ("rage__cutfObjectIdEventArgs", "camera"):
+                return "camera_binding"
+            case ("rage__cutfObjectIdListEventArgs", "asset_manager"):
+                return "asset_group"
+        category = _ARGS_CATEGORY_MAP.get(resolved.event_args.type_name)
+        if category is not None:
+            return category
+    if resolved.object is not None:
+        match object_role:
+            case "light":
+                return "light_state"
+            case "object":
+                pass
+            case str(role):
+                return role
+    return "event"
+
+
+def _event_duration(args_node: CutNode | None) -> float | None:
+    if args_node is None:
+        return None
+    if "fSubtitleDuration" in args_node.fields:
+        return float(args_node.fields["fSubtitleDuration"])
+    if "interpTime" in args_node.fields:
+        return float(args_node.fields["interpTime"])
+    if "fTransitionInDuration" in args_node.fields or "fTransitionOutDuration" in args_node.fields:
+        return max(
+            float(args_node.fields.get("fTransitionInDuration", 0.0) or 0.0),
+            float(args_node.fields.get("fTransitionOutDuration", 0.0) or 0.0),
+        )
+    return None
+
+
+def _event_label(args_node: CutNode | None, object_name: str | None) -> str | None:
+    if args_node is not None:
+        for field_name in ("cName", "cameraCutHashName", "StreamingName"):
+            if field_name in args_node.fields:
+                value = _coerce_name(args_node.fields[field_name])
+                if value:
+                    return value
+    return object_name
+
+
+def _track_identity(category: str, object_role: str | None, object_name: str | None, object_id: int | None, *, is_load_event: bool) -> tuple[str, str]:
+    if is_load_event:
+        return "load", "Load"
+    if category == "camera_cut":
+        return "camera", "Camera"
+    if category == "subtitle":
+        return "subtitle", "Subtitles"
+    if category == "load_scene":
+        return "scene", "Scene"
+    if object_role in {"camera", "light", "audio", "fade", "overlay", "particle_fx", "subtitle"}:
+        key = object_name or (f"{object_role}:{object_id}" if object_id is not None else object_role)
+        return f"{object_role}:{key}", key
+    if _is_scene_entity(object_role):
+        key = object_name or (f"{object_role}:{object_id}" if object_id is not None else object_role)
+        return f"{object_role}:{key}", key
+    key = object_name or category
+    return category, key

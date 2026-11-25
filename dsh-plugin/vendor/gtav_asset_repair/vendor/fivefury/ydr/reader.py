@@ -1,0 +1,467 @@
+from __future__ import annotations
+
+import struct
+from pathlib import Path
+
+from .. import _native as _native_backend
+from ..binary import f32 as _f32
+from ..binary import read_c_string
+from ..binary import u16 as _u16
+from ..binary import u32 as _u32
+from ..binary import u64 as _u64
+from ..binary import vec3 as _vec3
+from ..bounds import read_bound_from_pointer
+from ..common import ByteSource, read_source_bytes
+from ..hashing import jenk_hash
+from ..resolver import resolve_hash
+from ..resource import (
+    RSC7_MAGIC,
+    ResourceHeader,
+    checked_virtual_offset,
+    physical_to_offset,
+    read_virtual_pointer_array,
+    split_rsc7_sections,
+    virtual_to_offset,
+)
+from ..ytd import Ytd, read_embedded_texture_dictionary
+from .defs import (
+    DAT_PHYSICAL_BASE,
+    DAT_VIRTUAL_BASE,
+    LOD_ORDER,
+    LOD_POINTER_OFFSETS,
+    YdrLod,
+    YdrSkeletonBinding,
+)
+from .gen9 import decode_gen9_vertex_declaration_layout, load_gen9_shader_library
+from .model import Ydr, YdrMaterial, YdrMesh, YdrModel
+from .read_joints import parse_joints
+from .read_lights import parse_lights
+from .read_materials import parameter_component_count, parse_materials
+from .read_skeleton import parse_skeleton
+from .shaders import ShaderLibrary, load_shader_library
+
+_ROOT_OFFSET = 0x10
+_ENHANCED_YDR_VERSIONS = frozenset({154, 159})
+
+
+def _virtual_offset(pointer: int, data: bytes) -> int:
+    return checked_virtual_offset(pointer, data, base=DAT_VIRTUAL_BASE)
+
+
+def _resolve_buffer(pointer: int, system_data: bytes, graphics_data: bytes) -> tuple[bytes, int]:
+    if pointer >= DAT_PHYSICAL_BASE:
+        offset = physical_to_offset(pointer, base=DAT_PHYSICAL_BASE)
+        source = graphics_data
+    else:
+        offset = virtual_to_offset(pointer, base=DAT_VIRTUAL_BASE)
+        source = system_data
+    if offset < 0 or offset > len(source):
+        raise ValueError("pointer is out of range")
+    return source, offset
+
+
+def _read_buffer(pointer: int, size: int, system_data: bytes, graphics_data: bytes) -> bytes:
+    if not pointer or size <= 0:
+        return b""
+    source, offset = _resolve_buffer(pointer, system_data, graphics_data)
+    end = offset + size
+    if end > len(source):
+        raise ValueError("buffer is truncated")
+    return source[offset:end]
+
+
+def _read_pointer_array(pointer: int, count: int, system_data: bytes) -> list[int]:
+    return read_virtual_pointer_array(system_data, pointer, count, base=DAT_VIRTUAL_BASE)
+
+
+def _read_ushort_array(pointer: int, count: int, system_data: bytes, graphics_data: bytes) -> list[int]:
+    if not pointer or count <= 0:
+        return []
+    data = _read_buffer(pointer, count * 2, system_data, graphics_data)
+    return list(struct.unpack_from(f"<{count}H", data, 0))
+
+
+def _try_read_c_string(pointer: int, system_data: bytes) -> str:
+    if not pointer:
+        return ""
+    try:
+        return read_c_string(system_data, _virtual_offset(pointer, system_data))
+    except (IndexError, OverflowError, UnicodeError, ValueError, struct.error):
+        return ""
+
+
+def _hash_name(value: str | None) -> int:
+    if not value:
+        return 0
+    return int(jenk_hash(value))
+
+
+def _resolve_name(hash_value: int) -> str | None:
+    if not hash_value:
+        return None
+    return resolve_hash(hash_value)
+
+
+def _decode_parameter_value(data_type: int, data_pointer: int, system_data: bytes, *, type_name: str | None) -> object | None:
+    if data_type <= 0 or not data_pointer:
+        return None
+    raw = _read_buffer(data_pointer, max(1, int(data_type)) * 16, system_data, b"")
+    component_count = parameter_component_count(type_name)
+    values: list[tuple[float, ...]] = []
+    for chunk_index in range(max(1, int(data_type))):
+        offset = chunk_index * 16
+        decoded = struct.unpack_from("<4f", raw, offset)[:component_count]
+        values.append(tuple(float(component) for component in decoded))
+    if len(values) == 1:
+        if component_count == 1:
+            return float(values[0][0])
+        return values[0]
+    return tuple(values)
+
+
+def _decode_vertices(
+    vertex_bytes: bytes,
+    vertex_count: int,
+    stride: int,
+    flags: int,
+    types_value: int,
+    *,
+    component_offsets: tuple[int, ...] | None = None,
+) -> dict[str, object]:
+    return _native_backend._ydr_decode_vertex_buffer(
+        vertex_bytes,
+        vertex_count,
+        stride,
+        flags,
+        types_value,
+        component_offsets,
+    )
+
+
+def _parse_model_list(pointer: int, system_data: bytes) -> list[int]:
+    if not pointer:
+        return []
+    header_off = _virtual_offset(pointer, system_data)
+    data_pointer = _u64(system_data, header_off + 0x00)
+    count = _u16(system_data, header_off + 0x08)
+    return _read_pointer_array(data_pointer, count, system_data)
+
+
+def _parse_mesh(
+    system_data: bytes,
+    graphics_data: bytes,
+    geometry_pointer: int,
+    material: YdrMaterial | None,
+    material_index: int,
+    render_mask: int,
+    flags: int,
+    *,
+    enhanced: bool = False,
+) -> YdrMesh:
+    geometry_off = _virtual_offset(geometry_pointer, system_data)
+    vertex_buffer_pointer = _u64(system_data, geometry_off + 0x18)
+    index_buffer_pointer = _u64(system_data, geometry_off + 0x38)
+    indices_count = _u32(system_data, geometry_off + 0x58)
+    vertices_count = _u16(system_data, geometry_off + 0x60)
+    bone_ids_pointer = _u64(system_data, geometry_off + 0x68)
+    vertex_stride = _u16(system_data, geometry_off + 0x70)
+    bone_ids_count = _u16(system_data, geometry_off + 0x72)
+
+    vertex_buffer_off = _virtual_offset(vertex_buffer_pointer, system_data)
+    if enhanced:
+        vertex_count = _u32(system_data, vertex_buffer_off + 0x08)
+        vb_stride = _u16(system_data, vertex_buffer_off + 0x0C)
+        vb_flags = _u32(system_data, vertex_buffer_off + 0x10)
+        vertex_data_pointer = _u64(system_data, vertex_buffer_off + 0x18)
+        info_pointer = _u64(system_data, vertex_buffer_off + 0x38)
+        declaration_data = _read_buffer(info_pointer, 320, system_data, b"")
+        (
+            declaration_flags,
+            declaration_types,
+            declaration_stride,
+            declaration_vertex_count,
+            declaration_offsets,
+        ) = decode_gen9_vertex_declaration_layout(declaration_data)
+    else:
+        vb_stride = _u16(system_data, vertex_buffer_off + 0x08)
+        vb_flags = _u16(system_data, vertex_buffer_off + 0x0A)
+        vertex_data_pointer = _u64(system_data, vertex_buffer_off + 0x10) or _u64(system_data, vertex_buffer_off + 0x20)
+        vertex_count = _u32(system_data, vertex_buffer_off + 0x18)
+        info_pointer = _u64(system_data, vertex_buffer_off + 0x30)
+
+        declaration_off = _virtual_offset(info_pointer, system_data)
+        declaration_flags = _u32(system_data, declaration_off + 0x00)
+        declaration_stride = _u16(system_data, declaration_off + 0x04)
+        declaration_types = _u64(system_data, declaration_off + 0x08)
+        declaration_vertex_count = 0
+        declaration_offsets = None
+
+    stride = int(declaration_stride or vb_stride or vertex_stride)
+    count = int(vertices_count or vertex_count or declaration_vertex_count)
+    vertex_bytes = _read_buffer(vertex_data_pointer, stride * count, system_data, graphics_data)
+    decoded = _decode_vertices(
+        vertex_bytes,
+        count,
+        stride,
+        declaration_flags,
+        declaration_types,
+        component_offsets=declaration_offsets,
+    )
+
+    index_buffer_off = _virtual_offset(index_buffer_pointer, system_data)
+    indices_pointer = _u64(system_data, index_buffer_off + 0x18) if enhanced else _u64(system_data, index_buffer_off + 0x10)
+    index_bytes = _read_buffer(indices_pointer, int(indices_count) * 2, system_data, graphics_data)
+    indices = list(struct.unpack_from(f"<{indices_count}H", index_bytes, 0)) if indices_count else []
+    bone_ids = _read_ushort_array(bone_ids_pointer, bone_ids_count, system_data, graphics_data)
+
+    return YdrMesh(
+        material_index=material_index,
+        material=material,
+        indices=indices,
+        positions=decoded["positions"],
+        normals=decoded["normals"],
+        tangents=decoded["tangents"],
+        texcoords=decoded["texcoords"],
+        colours0=list(decoded["colours0"]),
+        colours1=list(decoded["colours1"]),
+        blend_weights=list(decoded["blend_weights"]),
+        blend_indices=list(decoded["blend_indices"]),
+        bone_ids=bone_ids,
+        vertex_stride=stride,
+        declaration_flags=declaration_flags,
+        declaration_types=declaration_types,
+        vertex_buffer_flags=int(vb_flags),
+        render_mask=render_mask,
+        flags=flags,
+    )
+
+
+def _parse_model(
+    system_data: bytes,
+    graphics_data: bytes,
+    model_pointer: int,
+    materials: list[YdrMaterial],
+    lod: YdrLod,
+    *,
+    enhanced: bool = False,
+) -> YdrModel:
+    model_off = _virtual_offset(model_pointer, system_data)
+    geometries_pointer = _u64(system_data, model_off + 0x08)
+    geometry_count = _u16(system_data, model_off + 0x10)
+    shader_mapping_pointer = _u64(system_data, model_off + 0x20)
+    skeleton_binding = YdrSkeletonBinding.from_int(_u32(system_data, model_off + 0x28))
+    render_mask_flags = _u16(system_data, model_off + 0x2C)
+
+    geometry_pointers = _read_pointer_array(geometries_pointer, geometry_count, system_data)
+    shader_mapping = _read_ushort_array(shader_mapping_pointer, geometry_count, system_data, b"")
+
+    render_mask = render_mask_flags & 0xFF
+    flags = (render_mask_flags >> 8) & 0xFF
+    meshes: list[YdrMesh] = []
+    for geometry_index, geometry_pointer in enumerate(geometry_pointers):
+        material_index = shader_mapping[geometry_index] if geometry_index < len(shader_mapping) else -1
+        material = materials[material_index] if 0 <= material_index < len(materials) else None
+        meshes.append(
+            _parse_mesh(
+                system_data,
+                graphics_data,
+                geometry_pointer,
+                material,
+                material_index,
+                render_mask,
+                flags,
+                enhanced=enhanced,
+            )
+        )
+
+    return YdrModel(
+        index=0,
+        lod=lod,
+        meshes=meshes,
+        render_mask=render_mask,
+        flags=flags,
+        skeleton_binding=skeleton_binding,
+    )
+
+
+def _parse_lods(
+    system_data: bytes,
+    graphics_data: bytes,
+    materials: list[YdrMaterial],
+    *,
+    root_offset: int,
+    enhanced: bool = False,
+) -> dict[YdrLod, list[YdrModel]]:
+    lods: dict[YdrLod, list[YdrModel]] = {}
+    for lod_name in LOD_ORDER:
+        pointer = _u64(system_data, root_offset + LOD_POINTER_OFFSETS[lod_name])
+        model_pointers = _parse_model_list(pointer, system_data)
+        if not model_pointers:
+            continue
+        lod_models = [
+            _parse_model(system_data, graphics_data, model_pointer, materials, lod_name, enhanced=enhanced)
+            for model_pointer in model_pointers
+        ]
+        for model_index, model in enumerate(lod_models):
+            model.index = model_index
+        lods[lod_name] = lod_models
+    return lods
+
+
+def _parse_embedded_textures(system_data: bytes, graphics_data: bytes, version: int, texture_dictionary_pointer: int | None) -> Ytd | None:
+    if not texture_dictionary_pointer:
+        return None
+    try:
+        return read_embedded_texture_dictionary(system_data, graphics_data, version=version, pointer=texture_dictionary_pointer)
+    except (IndexError, OverflowError, UnicodeError, ValueError, struct.error):
+        return None
+
+
+def _read_ydr_from_sections(
+    header: ResourceHeader,
+    system_data: bytes,
+    graphics_data: bytes,
+    *,
+    root_offset: int = _ROOT_OFFSET,
+    path: str | Path = "",
+    shader_library: ShaderLibrary | None = None,
+    read_extensions: bool = True,
+    inherited_materials: list[YdrMaterial] | None = None,
+    enhanced: bool | None = None,
+) -> Ydr:
+    active_shader_library = shader_library if shader_library is not None else load_shader_library()
+    if enhanced is None:
+        enhanced = int(header.version) in _ENHANCED_YDR_VERSIONS
+    gen9_library = load_gen9_shader_library() if enhanced else None
+    materials, texture_dictionary_pointer = parse_materials(
+        system_data,
+        active_shader_library,
+        root_offset=root_offset,
+        virtual_offset=_virtual_offset,
+        u16=_u16,
+        u32=_u32,
+        u64=_u64,
+        read_pointer_array=_read_pointer_array,
+        resolve_name=_resolve_name,
+        hash_name=_hash_name,
+        decode_parameter_value=_decode_parameter_value,
+        try_read_c_string=_try_read_c_string,
+        enhanced=enhanced,
+        gen9_library=gen9_library,
+    )
+    model_materials = materials or inherited_materials or []
+    lods = _parse_lods(
+        system_data,
+        graphics_data,
+        model_materials,
+        root_offset=root_offset,
+        enhanced=enhanced,
+    )
+    has_geometry = any(
+        model.meshes
+        for models in lods.values()
+        for model in models
+    )
+    exposed_materials = model_materials if has_geometry else materials
+    skeleton = parse_skeleton(
+        system_data,
+        _u64(system_data, root_offset + 0x08),
+        virtual_offset=_virtual_offset,
+        u16=_u16,
+        u32=_u32,
+        u64=_u64,
+        f32=_f32,
+    )
+    joints = parse_joints(
+        system_data,
+        _u64(system_data, root_offset + 0x80),
+        virtual_offset=_virtual_offset,
+        u16=_u16,
+        u32=_u32,
+        u64=_u64,
+        f32=_f32,
+        vec3=_vec3,
+    )
+    lights = (
+        parse_lights(
+            system_data,
+            root_offset=root_offset,
+            virtual_offset=_virtual_offset,
+            u16=_u16,
+            u32=_u32,
+            u64=_u64,
+            f32=_f32,
+            vec3=_vec3,
+        )
+        if read_extensions
+        else []
+    )
+    bound = None
+    if read_extensions:
+        bound_pointer = _u64(system_data, root_offset + 0xB8)
+        try:
+            bound = read_bound_from_pointer(bound_pointer, system_data) if bound_pointer else None
+        except (IndexError, OverflowError, ValueError, struct.error):
+            bound = None
+    embedded_textures = _parse_embedded_textures(system_data, graphics_data, int(header.version), texture_dictionary_pointer)
+
+    return Ydr(
+        version=int(header.version),
+        path=str(path),
+        shader_group_pointer=_u64(system_data, root_offset + 0x00),
+        materials=exposed_materials,
+        lods=lods,
+        bounding_center=_vec3(system_data, root_offset + 0x10),
+        bounding_sphere_radius=_f32(system_data, root_offset + 0x1C),
+        bounding_box_min=_vec3(system_data, root_offset + 0x20),
+        bounding_box_max=_vec3(system_data, root_offset + 0x30),
+        skeleton=skeleton,
+        joints=joints,
+        lights=lights,
+        embedded_textures=embedded_textures,
+        bound=bound,
+        lod_distances={
+            YdrLod.HIGH: _f32(system_data, root_offset + 0x60),
+            YdrLod.MEDIUM: _f32(system_data, root_offset + 0x64),
+            YdrLod.LOW: _f32(system_data, root_offset + 0x68),
+            YdrLod.VERY_LOW: _f32(system_data, root_offset + 0x6C),
+        },
+        render_mask_flags={
+            YdrLod.HIGH: _u32(system_data, root_offset + 0x70),
+            YdrLod.MEDIUM: _u32(system_data, root_offset + 0x74),
+            YdrLod.LOW: _u32(system_data, root_offset + 0x78),
+            YdrLod.VERY_LOW: _u32(system_data, root_offset + 0x7C),
+        },
+        unknown_98=_u16(system_data, root_offset + 0x88),
+        unknown_9c=_u32(system_data, root_offset + 0x8C),
+    )
+
+
+def read_ydr(
+    source: ByteSource,
+    *,
+    path: str | Path = "",
+    shader_library: ShaderLibrary | None = None,
+) -> Ydr:
+    data = read_source_bytes(source)
+    if len(data) < 16:
+        raise ValueError("YDR data is too short")
+    magic = struct.unpack_from("<I", data, 0)[0]
+    if magic != RSC7_MAGIC:
+        raise ValueError("YDR data must be a standalone RSC7 resource")
+
+    header, system_data, graphics_data = split_rsc7_sections(data)
+    resource_path = str(path or source) if isinstance(source, (str, Path)) or path else ""
+    return _read_ydr_from_sections(
+        header,
+        system_data,
+        graphics_data,
+        root_offset=_ROOT_OFFSET,
+        path=resource_path,
+        shader_library=shader_library,
+    )
+
+
+__all__ = [
+    "read_ydr",
+]

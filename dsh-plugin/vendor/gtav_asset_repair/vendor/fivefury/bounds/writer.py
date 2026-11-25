@@ -1,0 +1,1008 @@
+from __future__ import annotations
+
+import dataclasses
+import struct
+from collections.abc import Callable, Mapping
+
+from .. import _native as _native_backend
+from ..resource import ResourceBlockSpan, ResourceWriter, write_resource_pages_info
+from ..vector import Vector3
+from .model import (
+    Bound,
+    BoundAabb,
+    BoundBox,
+    BoundBVH,
+    BoundBvh,
+    BoundBvhNode,
+    BoundBvhTree,
+    BoundCapsule,
+    BoundChild,
+    BoundCloth,
+    BoundComposite,
+    BoundCompositeFlags,
+    BoundCylinder,
+    BoundDisc,
+    BoundGeometry,
+    BoundGeometryOctants,
+    BoundMaterial,
+    BoundPolygon,
+    BoundPolygonBox,
+    BoundPolygonCapsule,
+    BoundPolygonCylinder,
+    BoundPolygonSphere,
+    BoundPolygonTriangle,
+    BoundResourcePagesInfo,
+    BoundSphere,
+    BoundTransform,
+    _merge_bounds,
+    _sphere_radius_from_bounds,
+    _transform_point,
+)
+from .runtime_headers import legacy_bound_file_vft
+
+_DAT_VIRTUAL_BASE = 0x50000000
+_RESOURCE_FILE_BASE_SIZE = 0x10
+_BOUND_BLOCK_SIZE = 0x70
+_COMPOSITE_BLOCK_SIZE = 0xB0
+_GEOMETRY_BLOCK_SIZE = 0x130
+_GEOMETRY_BVH_BLOCK_SIZE = 0x150
+_BVH_BLOCK_SIZE = 0x80
+_GEOMETRY_BVH_ITEM_THRESHOLD = 4
+_COMPOSITE_BVH_ITEM_THRESHOLD = 1
+_COMPOSITE_MIN_CHILDREN_FOR_BVH = 6
+_MAX_BVH_TREE_NODE_COUNT = 127
+_FLOAT_EPSILON = 1.401298464324817e-45
+BoundFileVftResolver = Callable[[Bound], int]
+
+
+def _virtual(offset: int) -> int:
+    return _DAT_VIRTUAL_BASE + int(offset)
+
+
+def _bound_size(bound: Bound) -> int:
+    if isinstance(bound, BoundComposite):
+        return _COMPOSITE_BLOCK_SIZE
+    if isinstance(bound, BoundBVH):
+        return _GEOMETRY_BVH_BLOCK_SIZE
+    if isinstance(bound, BoundGeometry):
+        return _GEOMETRY_BLOCK_SIZE
+    if isinstance(bound, (BoundSphere, BoundBox, BoundCapsule, BoundDisc, BoundCylinder, BoundCloth)):
+        return _BOUND_BLOCK_SIZE
+    raise NotImplementedError(f"bound writer does not support {bound.__class__.__name__} yet")
+
+
+def _write_vec3(writer: ResourceWriter, offset: int, value: Vector3) -> None:
+    writer.pack_into("3f", offset, *value)
+
+
+def _write_aabb(writer: ResourceWriter, offset: int, bounds: BoundAabb, *, minimum_w: float = 0.0, maximum_w: float = 0.0) -> None:
+    writer.pack_into("4f", offset + 0x00, *bounds.minimum, float(minimum_w))
+    writer.pack_into("4f", offset + 0x10, *bounds.maximum, float(maximum_w))
+
+
+def _write_transform(writer: ResourceWriter, offset: int, transform: BoundTransform | None) -> None:
+    value = transform or BoundTransform(
+        column1=Vector3(1.0, 0.0, 0.0),
+        column2=Vector3(0.0, 1.0, 0.0),
+        column3=Vector3(0.0, 0.0, 1.0),
+        column4=Vector3(),
+        flags2=1,
+        flags3=1,
+    )
+    writer.pack_into("3fI", offset + 0x00, *value.column1, value.flags1)
+    writer.pack_into("3fI", offset + 0x10, *value.column2, value.flags2)
+    writer.pack_into("3fI", offset + 0x20, *value.column3, value.flags3)
+    writer.pack_into("3fI", offset + 0x30, *value.column4, value.flags4)
+
+
+def _write_composite_flags(writer: ResourceWriter, offset: int, flags: BoundCompositeFlags | None) -> None:
+    value = flags or BoundCompositeFlags()
+    writer.pack_into("II", offset, value.flags1, value.flags2)
+
+
+def _pack_bound_material_words(bound: Bound) -> tuple[int, int]:
+    data1 = (
+        (bound.material_index & 0xFF)
+        | ((bound.procedural_id & 0xFF) << 8)
+        | ((bound.room_id & 0x1F) << 16)
+        | ((bound.ped_density & 0x07) << 21)
+        | ((bound.unk_flags & 0xFF) << 24)
+    )
+    data2 = (
+        (bound.poly_flags & 0xFF)
+        | ((bound.material_color_index & 0xFF) << 8)
+        | ((bound.packed_material_hi_bits & 0xFFFF) << 16)
+    )
+    return (data1, data2)
+
+
+def _write_resource_file_base(
+    writer: ResourceWriter,
+    offset: int,
+    bound: Bound,
+    *,
+    pages_info_offset: int = 0,
+    file_vft_resolver: BoundFileVftResolver | None = None,
+) -> None:
+    file_vft = (
+        int(file_vft_resolver(bound))
+        if file_vft_resolver is not None
+        else int(bound.file_vft)
+        if bound.file_vft
+        else legacy_bound_file_vft(bound)
+    )
+    writer.pack_into("I", offset + 0x00, file_vft)
+    writer.pack_into("I", offset + 0x04, int(bound.file_unknown))
+    writer.pack_into("Q", offset + 0x08, _virtual(pages_info_offset) if pages_info_offset else 0)
+
+
+def _write_bound_common(
+    writer: ResourceWriter,
+    offset: int,
+    bound: Bound,
+    *,
+    ref_counts: Mapping[int, int] | None = None,
+    file_vft_resolver: BoundFileVftResolver | None = None,
+) -> None:
+    material_word1, material_word2 = _pack_bound_material_words(bound)
+    _write_resource_file_base(
+        writer,
+        offset,
+        bound,
+        file_vft_resolver=file_vft_resolver,
+    )
+    writer.pack_into("B", offset + 0x10, int(bound.bound_type))
+    writer.pack_into("B", offset + 0x11, int(bound.flags) & 0xFF)
+    writer.pack_into("H", offset + 0x12, bound.part_index & 0xFFFF)
+    writer.pack_into("f", offset + 0x14, bound.sphere_radius)
+    writer.pack_into("I", offset + 0x18, bound.alignment_padding_18h)
+    writer.pack_into("I", offset + 0x1C, bound.alignment_padding_1ch)
+    _write_vec3(writer, offset + 0x20, bound.box_max)
+    writer.pack_into("f", offset + 0x2C, bound.margin)
+    _write_vec3(writer, offset + 0x30, bound.box_min)
+    writer.pack_into(
+        "I",
+        offset + 0x3C,
+        ref_counts.get(id(bound), bound.ref_count) if ref_counts else bound.ref_count,
+    )
+    _write_vec3(writer, offset + 0x40, bound.box_center)
+    writer.pack_into("I", offset + 0x4C, material_word1)
+    _write_vec3(writer, offset + 0x50, bound.sphere_center)
+    writer.pack_into("I", offset + 0x5C, material_word2)
+    _write_vec3(writer, offset + 0x60, bound.angular_inertia)
+    writer.pack_into("f", offset + 0x6C, bound.volume)
+
+
+def _write_bound(
+    writer: ResourceWriter,
+    bound: Bound,
+    *,
+    offset: int | None = None,
+    ref_counts: Mapping[int, int] | None = None,
+    file_vft_resolver: BoundFileVftResolver | None = None,
+    prepared_bvhs: dict[int, tuple[BoundBvh, list[BoundPolygon], list[int]]] | None = None,
+) -> int:
+    prepared_bvh = None
+    match bound:
+        case BoundComposite():
+            _refresh_composite_metrics(bound)
+        case BoundBVH():
+            prepared_bvh = (
+                prepared_bvhs.get(id(bound)) if prepared_bvhs is not None else None
+            )
+            if prepared_bvh is None:
+                prepared_bvh = _refresh_geometry_bvh_metrics(bound)
+                if prepared_bvhs is not None:
+                    prepared_bvhs[id(bound)] = prepared_bvh
+    bound_offset = 0 if offset is None else offset
+    if offset is None:
+        bound_offset = writer.alloc(_bound_size(bound), 16)
+    _write_bound_common(
+        writer,
+        bound_offset,
+        bound,
+        ref_counts=ref_counts,
+        file_vft_resolver=file_vft_resolver,
+    )
+    match bound:
+        case BoundComposite():
+            _write_composite(
+                writer,
+                bound_offset,
+                bound,
+                ref_counts=ref_counts,
+                file_vft_resolver=file_vft_resolver,
+                prepared_bvhs=prepared_bvhs,
+            )
+        case BoundBVH():
+            _write_geometry(
+                writer,
+                bound_offset,
+                bound,
+                with_bvh=True,
+                prepared=prepared_bvh,
+            )
+        case BoundGeometry():
+            _write_geometry(writer, bound_offset, bound, with_bvh=False)
+        case BoundSphere() | BoundBox() | BoundCapsule() | BoundDisc() | BoundCylinder() | BoundCloth():
+            pass
+        case _:
+            raise NotImplementedError(
+                f"bound writer does not support {bound.__class__.__name__} yet"
+            )
+    match bound:
+        case BoundCapsule():
+            writer.pack_into(
+                "f", bound_offset + 0x70, float(bound.capsule_half_height)
+            )
+            writer.pack_into("I", bound_offset + 0x74, bound.padding_74h)
+            writer.pack_into("I", bound_offset + 0x78, bound.padding_78h)
+            writer.pack_into("I", bound_offset + 0x7C, bound.padding_7ch)
+        case BoundDisc() | BoundCylinder() | BoundCloth():
+            writer.pack_into("I", bound_offset + 0x70, bound.padding_70h)
+            writer.pack_into("I", bound_offset + 0x74, bound.padding_74h)
+            writer.pack_into("I", bound_offset + 0x78, bound.padding_78h)
+            writer.pack_into("I", bound_offset + 0x7C, bound.padding_7ch)
+    return bound_offset
+
+
+def _child_bounds(child: BoundChild) -> BoundAabb:
+    if child.bounds is not None:
+        return child.bounds
+    if child.bound is not None:
+        return child.bound.bounds
+    return BoundAabb(Vector3(), Vector3())
+
+
+def _write_composite(
+    writer: ResourceWriter,
+    offset: int,
+    bound: BoundComposite,
+    *,
+    ref_counts: Mapping[int, int] | None = None,
+    file_vft_resolver: BoundFileVftResolver | None = None,
+    prepared_bvhs: dict[int, tuple[BoundBvh, list[BoundPolygon], list[int]]] | None = None,
+) -> None:
+    child_offsets = [
+        _write_bound(
+            writer,
+            child.bound,
+            ref_counts=ref_counts,
+            file_vft_resolver=file_vft_resolver,
+            prepared_bvhs=prepared_bvhs,
+        )
+        if child.bound is not None
+        else 0
+        for child in bound.children
+    ]
+    child_capacity = len(bound.children)
+    active_child_count = bound.child_count
+    if not 0 <= active_child_count <= child_capacity:
+        raise ValueError(
+            "composite active child count must fit its allocated capacity"
+        )
+
+    child_ptrs_offset = 0
+    transforms1_offset = 0
+    transforms2_offset = 0
+    child_bounds_offset = 0
+    flags1_offset = 0
+    flags2_offset = 0
+    bvh_offset = 0
+
+    if child_capacity:
+        child_ptrs_offset = writer.alloc(child_capacity * 8, 8)
+        for index, child_offset in enumerate(child_offsets):
+            writer.pack_into(
+                "Q",
+                child_ptrs_offset + (index * 8),
+                _virtual(child_offset) if child_offset else 0,
+            )
+
+        transforms1_offset = writer.alloc(child_capacity * 0x40, 16, relocate_pointers=False)
+        transforms2_offset = writer.alloc(child_capacity * 0x40, 16, relocate_pointers=False)
+        for index, child in enumerate(bound.children):
+            _write_transform(writer, transforms1_offset + (index * 0x40), child.transform)
+            _write_transform(writer, transforms2_offset + (index * 0x40), child.transform)
+
+        child_bounds_offset = writer.alloc(child_capacity * 0x20, 16, relocate_pointers=False)
+        for index, child in enumerate(bound.children):
+            _write_aabb(
+                writer,
+                child_bounds_offset + (index * 0x20),
+                _child_bounds(child),
+                minimum_w=_FLOAT_EPSILON,
+                maximum_w=(
+                    float(child.bound.margin)
+                    if child.bound is not None
+                    else 0.0
+                ),
+            )
+
+        # Vanilla composites either carry per-child flag arrays for every
+        # populated slot (standalone YBN map collision) or omit both arrays
+        # entirely (fragment props, whose type/include flags are assigned by
+        # fragManager at instance time).  Serializing zeroed arrays for a
+        # fragment leaves its instances typed as nothing, so only allocate
+        # the arrays when the graph actually authored flags.
+        if any(
+            child.flags1 is not None or child.flags2 is not None
+            for child in bound.children
+        ):
+            flags1_offset = writer.alloc(child_capacity * 0x08, 8, relocate_pointers=False)
+            flags2_offset = writer.alloc(child_capacity * 0x08, 8, relocate_pointers=False)
+            for index, child in enumerate(bound.children):
+                _write_composite_flags(writer, flags1_offset + (index * 0x08), child.flags1)
+                _write_composite_flags(writer, flags2_offset + (index * 0x08), child.flags2)
+
+        if bound.bvh is not None:
+            bvh_offset = _write_bvh(writer, bound, bvh=bound.bvh)
+
+    writer.pack_into("Q", offset + 0x70, _virtual(child_ptrs_offset) if child_ptrs_offset else 0)
+    writer.pack_into("Q", offset + 0x78, _virtual(transforms1_offset) if transforms1_offset else 0)
+    writer.pack_into("Q", offset + 0x80, _virtual(transforms2_offset) if transforms2_offset else 0)
+    writer.pack_into("Q", offset + 0x88, _virtual(child_bounds_offset) if child_bounds_offset else 0)
+    writer.pack_into("Q", offset + 0x90, _virtual(flags1_offset) if flags1_offset else 0)
+    writer.pack_into("Q", offset + 0x98, _virtual(flags2_offset) if flags2_offset else 0)
+    writer.pack_into("H", offset + 0xA0, child_capacity)
+    writer.pack_into("H", offset + 0xA2, active_child_count)
+    writer.pack_into("I", offset + 0xA4, 0)
+    writer.pack_into("Q", offset + 0xA8, _virtual(bvh_offset) if bvh_offset else 0)
+
+
+def _material_data(material: BoundMaterial) -> tuple[int, int]:
+    if material.data1 or material.data2:
+        return (material.data1, material.data2)
+    data1 = (
+        (material.type & 0xFF)
+        | ((material.procedural_id & 0xFF) << 8)
+        | ((material.room_id & 0x1F) << 16)
+        | ((material.ped_density & 0x07) << 21)
+        | ((material.flags & 0xFF) << 24)
+    )
+    data2 = (
+        ((material.flags >> 8) & 0xFF)
+        | ((material.material_color_index & 0xFF) << 8)
+        | ((material.reserved & 0xFFFF) << 16)
+    )
+    return (data1, data2)
+
+
+def _choose_center_geom(bound: BoundGeometry) -> Vector3:
+    if bound.center_geom != Vector3():
+        return bound.center_geom
+    return (bound.box_min + bound.box_max) * 0.5
+
+
+def _choose_quantum(vertices: list[Vector3], center_geom: Vector3) -> Vector3:
+    if not vertices:
+        return Vector3(1.0, 1.0, 1.0)
+    delta = Vector3.maximum(
+        Vector3(abs(vertex.x - center_geom.x), abs(vertex.y - center_geom.y), abs(vertex.z - center_geom.z))
+        for vertex in vertices
+    )
+    minimum_quantum = 1.0 / 32767.0
+    return Vector3(
+        delta.x / 32767.0 if delta.x > 0.0 else minimum_quantum,
+        delta.y / 32767.0 if delta.y > 0.0 else minimum_quantum,
+        delta.z / 32767.0 if delta.z > 0.0 else minimum_quantum,
+    )
+
+
+def _quantize_vertices(vertices: list[Vector3], center_geom: Vector3, quantum: Vector3) -> bytes:
+    return _native_backend._bounds_quantize_vertices(
+        [vertex.as_tuple() for vertex in vertices],
+        center_geom.as_tuple(),
+        quantum.as_tuple(),
+    )
+
+
+def _choose_vertices_shrunk(bound: BoundGeometry, *, with_bvh: bool) -> list[Vector3]:
+    if with_bvh:
+        return []
+    if len(bound.vertices_shrunk) == len(bound.vertices):
+        return list(bound.vertices_shrunk)
+    return list(bound.vertices)
+
+
+def _choose_octants(
+    bound: BoundGeometry,
+    vertices_shrunk: list[Vector3],
+    *,
+    with_bvh: bool,
+) -> BoundGeometryOctants | None:
+    if with_bvh or not vertices_shrunk:
+        return None
+    octants = bound.octants if bound.octants is not None else BoundGeometryOctants.from_vertices(vertices_shrunk)
+    return octants if octants.has_items else None
+
+
+def _write_octants(writer: ResourceWriter, octants: BoundGeometryOctants | None) -> tuple[int, int]:
+    if octants is None or not octants.has_items:
+        return (0, 0)
+    total_items = octants.total_items
+    block_size = 0x80 + (total_items * 4)
+    block_offset = writer.alloc(block_size, 16)
+    pointer_table_offset = block_offset + 0x20
+    item_offset = block_offset + 0x60
+
+    for index, count in enumerate(octants.counts):
+        writer.pack_into("I", block_offset + (index * 4), count)
+
+    current = item_offset
+    for index, items in enumerate(octants.items):
+        pointer_value = _virtual(current) if items else 0
+        writer.pack_into("Q", pointer_table_offset + (index * 8), pointer_value)
+        if items:
+            for item_index, vertex_index in enumerate(items):
+                writer.pack_into("I", current + (item_index * 4), vertex_index)
+            current += len(items) * 4
+    return (block_offset, pointer_table_offset)
+
+
+def _encode_polygon(polygon: BoundPolygon) -> bytes:
+    if len(polygon.raw) == 16 and not isinstance(
+        polygon,
+        (BoundPolygonTriangle, BoundPolygonSphere, BoundPolygonCapsule, BoundPolygonBox, BoundPolygonCylinder),
+    ):
+        raw = bytearray(polygon.raw)
+    else:
+        raw = bytearray(16)
+        match polygon:
+            case BoundPolygonTriangle():
+                struct.pack_into(
+                    "<f6H",
+                    raw,
+                    0,
+                    polygon.tri_area,
+                    polygon.tri_index1,
+                    polygon.tri_index2,
+                    polygon.tri_index3,
+                    polygon.edge_index1,
+                    polygon.edge_index2,
+                    polygon.edge_index3,
+                )
+            case BoundPolygonSphere():
+                struct.pack_into(
+                    "<HHfII",
+                    raw,
+                    0,
+                    polygon.sphere_type,
+                    polygon.sphere_index,
+                    polygon.sphere_radius,
+                    polygon.unused0,
+                    polygon.unused1,
+                )
+            case BoundPolygonCapsule():
+                struct.pack_into(
+                    "<HHfHHI",
+                    raw,
+                    0,
+                    polygon.capsule_type,
+                    polygon.capsule_index1,
+                    polygon.capsule_radius,
+                    polygon.capsule_index2,
+                    polygon.unused0,
+                    polygon.unused1,
+                )
+            case BoundPolygonBox():
+                struct.pack_into(
+                    "<I4hI",
+                    raw,
+                    0,
+                    polygon.box_type,
+                    polygon.box_index1,
+                    polygon.box_index2,
+                    polygon.box_index3,
+                    polygon.box_index4,
+                    polygon.unused0,
+                )
+            case BoundPolygonCylinder():
+                struct.pack_into(
+                    "<HHfHHI",
+                    raw,
+                    0,
+                    polygon.cylinder_type,
+                    polygon.cylinder_index1,
+                    polygon.cylinder_radius,
+                    polygon.cylinder_index2,
+                    polygon.unused0,
+                    polygon.unused1,
+                )
+            case _:
+                raw[: len(polygon.raw[:16])] = polygon.raw[:16]
+    raw[0] = (raw[0] & 0xF8) | (int(polygon.polygon_type) & 0x07)
+    return bytes(raw)
+
+
+def _primitive_bounds(bound: BoundGeometry, polygon: BoundPolygon) -> BoundAabb:
+    vertices = bound.vertices
+    if not vertices:
+        return BoundAabb(bound.box_min, bound.box_max)
+    match polygon:
+        case BoundPolygonTriangle():
+            index0, index1, index2 = polygon.vertex_indices
+            points = (vertices[index0], vertices[index1], vertices[index2])
+            return BoundAabb(
+                Vector3.minimum(points),
+                Vector3.maximum(points),
+            )
+        case BoundPolygonSphere():
+            center = vertices[polygon.sphere_index]
+            radius = polygon.sphere_radius
+            extent = Vector3(radius, radius, radius)
+            return BoundAabb(center - extent, center + extent)
+        case BoundPolygonCapsule(capsule_radius=radius) | BoundPolygonCylinder(
+            cylinder_radius=radius
+        ):
+            index1, index2 = polygon.vertex_indices
+            point1 = vertices[index1]
+            point2 = vertices[index2]
+            extent = Vector3(radius, radius, radius)
+            minimum = Vector3.minimum((point1, point2)) - extent
+            maximum = Vector3.maximum((point1, point2)) + extent
+            return BoundAabb(minimum, maximum)
+        case BoundPolygonBox():
+            points = [vertices[index] for index in polygon.vertex_indices]
+            return BoundAabb(Vector3.minimum(points), Vector3.maximum(points))
+        case _:
+            return BoundAabb(bound.box_min, bound.box_max)
+
+
+def _quantize_bvh_point(
+    point: Vector3,
+    center: Vector3,
+    inverse: Vector3,
+) -> tuple[int, int, int]:
+    return (
+        max(-32767, min(32767, int((point.x - center.x) * inverse.x))),
+        max(-32767, min(32767, int((point.y - center.y) * inverse.y))),
+        max(-32767, min(32767, int((point.z - center.z) * inverse.z))),
+    )
+
+
+@dataclasses.dataclass(slots=True)
+class _BvhBuildItem:
+    minimum: Vector3
+    maximum: Vector3
+    index: int
+    polygon: BoundPolygon | None = None
+
+
+def _polygon_material_indices_for_write(bound: BoundGeometry, polygons: list[BoundPolygon] | None = None) -> list[int]:
+    source = polygons or bound.polygons
+    indices: list[int] = []
+    for index, polygon in enumerate(source):
+        if polygon.material_index >= 0:
+            indices.append(int(polygon.material_index) & 0xFF)
+        elif index < len(bound.polygon_material_indices):
+            indices.append(int(bound.polygon_material_indices[index]) & 0xFF)
+        else:
+            indices.append(0)
+    return indices
+
+
+def _refresh_geometry_bvh_metrics(bound: BoundBVH) -> tuple[BoundBvh, list[BoundPolygon], list[int]]:
+    """Rebuild the BVH once, refresh the bound metrics from it, and return the
+    prepared (bvh, polygons, material_indices) so the write path can reuse it."""
+    prepared = _build_geometry_bvh(bound)
+    bvh = prepared[0]
+    overall = BoundAabb(bvh.minimum, bvh.maximum)
+    bound.bvh = bvh
+    bound.box_min = overall.minimum
+    bound.box_max = overall.maximum
+    bound.box_center = bvh.center
+    bound.sphere_center = bvh.center
+    bound.sphere_radius = _sphere_radius_from_bounds(overall, bvh.center)
+    return prepared
+
+
+def _copy_polygon_for_reorder(
+    polygon: BoundPolygon,
+    *,
+    new_index: int,
+    edge_lookup: dict[int, int],
+) -> BoundPolygon:
+    if type(polygon) is BoundPolygonTriangle:
+        return BoundPolygonTriangle(
+            polygon_type=polygon.polygon_type,
+            raw=polygon.raw,
+            index=new_index,
+            material_index=polygon.material_index,
+            tri_area=polygon.tri_area,
+            tri_index1=polygon.tri_index1,
+            tri_index2=polygon.tri_index2,
+            tri_index3=polygon.tri_index3,
+            edge_index1=edge_lookup.get(polygon.edge_index1, 0xFFFF),
+            edge_index2=edge_lookup.get(polygon.edge_index2, 0xFFFF),
+            edge_index3=edge_lookup.get(polygon.edge_index3, 0xFFFF),
+        )
+    new_polygon = dataclasses.replace(polygon, index=new_index)
+    if isinstance(new_polygon, BoundPolygonTriangle):
+        new_polygon.edge_index1 = edge_lookup.get(polygon.edge_index1, 0xFFFF)
+        new_polygon.edge_index2 = edge_lookup.get(polygon.edge_index2, 0xFFFF)
+        new_polygon.edge_index3 = edge_lookup.get(polygon.edge_index3, 0xFFFF)
+    return new_polygon
+
+
+def _build_bvh_native(
+    items: list[_BvhBuildItem],
+    *,
+    fallback: BoundAabb,
+    item_threshold: int,
+) -> tuple[BoundBvh, list[_BvhBuildItem]]:
+    raw_items = [
+        (item.minimum.as_tuple(), item.maximum.as_tuple(), int(item.index))
+        for item in items
+    ]
+    (
+        order,
+        overall_minimum,
+        overall_maximum,
+        center,
+        quantum_inverse,
+        quantum,
+        raw_nodes,
+        raw_trees,
+    ) = _native_backend._bounds_build_bvh(
+        raw_items,
+        fallback.minimum.as_tuple(),
+        fallback.maximum.as_tuple(),
+        item_threshold=item_threshold,
+        max_tree_node_count=_MAX_BVH_TREE_NODE_COUNT,
+    )
+    item_lookup = {int(item.index): item for item in items}
+    ordered_items = [item_lookup[int(index)] for index in order if int(index) in item_lookup]
+    return (
+        BoundBvh(
+            minimum=Vector3.from_iterable(overall_minimum),
+            maximum=Vector3.from_iterable(overall_maximum),
+            center=Vector3.from_iterable(center),
+            quantum_inverse=Vector3.from_iterable(quantum_inverse),
+            quantum=Vector3.from_iterable(quantum),
+            nodes=[
+                BoundBvhNode(
+                    minimum=Vector3.from_iterable(minimum),
+                    maximum=Vector3.from_iterable(maximum),
+                    item_id=item_id,
+                    item_count=item_count,
+                )
+                for minimum, maximum, item_id, item_count in raw_nodes
+            ],
+            trees=[
+                BoundBvhTree(
+                    minimum=Vector3.from_iterable(minimum),
+                    maximum=Vector3.from_iterable(maximum),
+                    node_index=node_index,
+                    node_index2=node_index2,
+                )
+                for minimum, maximum, node_index, node_index2 in raw_trees
+            ],
+        ),
+        ordered_items,
+    )
+
+
+def _build_bvh_from_items(items: list[_BvhBuildItem], *, fallback: BoundAabb, item_threshold: int) -> BoundBvh:
+    bvh, _ordered_items = _build_bvh_native(items, fallback=fallback, item_threshold=item_threshold)
+    return bvh
+
+
+def _build_geometry_bvh(bound: BoundGeometry, item_threshold: int = _GEOMETRY_BVH_ITEM_THRESHOLD) -> tuple[BoundBvh, list[BoundPolygon], list[int]]:
+    items: list[_BvhBuildItem] = []
+    for index, polygon in enumerate(bound.polygons):
+        bounds = _primitive_bounds(bound, polygon)
+        items.append(
+            _BvhBuildItem(
+                minimum=bounds.minimum,
+                maximum=bounds.maximum,
+                index=index,
+                polygon=polygon,
+            )
+        )
+
+    if not items:
+        return (_build_bvh_from_items([], fallback=BoundAabb(bound.box_min, bound.box_max), item_threshold=item_threshold), [], [])
+
+    bvh, ordered_items = _build_bvh_native(items, fallback=BoundAabb(bound.box_min, bound.box_max), item_threshold=item_threshold)
+    item_lookup = {item.index: new_index for new_index, item in enumerate(ordered_items)}
+    reordered_polygons: list[BoundPolygon] = []
+    reordered_material_indices: list[int] = []
+    source_material_indices = _polygon_material_indices_for_write(bound)
+    for new_index, item in enumerate(ordered_items):
+        reordered_polygons.append(_copy_polygon_for_reorder(item.polygon, new_index=new_index, edge_lookup=item_lookup))
+        reordered_material_indices.append(source_material_indices[item.index] if item.index < len(source_material_indices) else 0)
+    return bvh, reordered_polygons, reordered_material_indices
+
+
+def _transform_aabb(bounds: BoundAabb, transform: BoundTransform | None) -> BoundAabb:
+    if transform is None:
+        return bounds
+    minimum = bounds.minimum
+    maximum = bounds.maximum
+    corners = [
+        _transform_point(Vector3(x, y, z), transform)
+        for x in (minimum.x, maximum.x)
+        for y in (minimum.y, maximum.y)
+        for z in (minimum.z, maximum.z)
+    ]
+    return BoundAabb(
+        minimum=Vector3.minimum(corners),
+        maximum=Vector3.maximum(corners),
+    )
+
+
+def _build_composite_bvh(bound: BoundComposite) -> BoundBvh | None:
+    if bound.child_count < _COMPOSITE_MIN_CHILDREN_FOR_BVH:
+        return None
+    items: list[_BvhBuildItem] = []
+    for index, child in enumerate(bound.active_children):
+        if child.bound is None:
+            continue
+        transformed_bounds = _transform_aabb(_child_bounds(child), child.transform)
+        items.append(
+            _BvhBuildItem(
+                minimum=transformed_bounds.minimum,
+                maximum=transformed_bounds.maximum,
+                index=index,
+            )
+        )
+    return _build_bvh_from_items(items, fallback=BoundAabb(bound.box_min, bound.box_max), item_threshold=_COMPOSITE_BVH_ITEM_THRESHOLD)
+
+
+def _refresh_composite_metrics(bound: BoundComposite) -> None:
+    active_children = [
+        child for child in bound.active_children if child.bound is not None
+    ]
+    if not active_children:
+        bound.bvh = None
+        return
+    transformed_bounds = [
+        _transform_aabb(_child_bounds(child), child.transform)
+        for child in active_children
+    ]
+    overall = _merge_bounds(transformed_bounds, BoundAabb(bound.box_min, bound.box_max))
+    center = (overall.minimum + overall.maximum) * 0.5
+    bound.box_min = overall.minimum
+    bound.box_max = overall.maximum
+    bound.box_center = center
+    bound.sphere_center = center
+    bound.sphere_radius = _sphere_radius_from_bounds(overall, center)
+    bound.bvh = _build_composite_bvh(bound)
+
+
+def _write_bvh(writer: ResourceWriter, bound: BoundGeometry | BoundComposite, *, bvh: BoundBvh | None = None) -> int:
+    active_bvh = bvh if bvh is not None else (bound.bvh if isinstance(bound, (BoundBVH, BoundComposite)) else None)
+    if active_bvh is None:
+        if isinstance(bound, BoundGeometry):
+            active_bvh, _, _ = _build_geometry_bvh(bound)
+        else:
+            raise ValueError("composite BVH must be prepared before writing")
+    assert active_bvh is not None
+
+    nodes_offset = 0
+    if active_bvh.nodes:
+        nodes_offset = writer.alloc(len(active_bvh.nodes) * 16, 16, relocate_pointers=False)
+        for index, node in enumerate(active_bvh.nodes):
+            qmin = _quantize_bvh_point(node.minimum, active_bvh.center, active_bvh.quantum_inverse)
+            qmax = _quantize_bvh_point(node.maximum, active_bvh.center, active_bvh.quantum_inverse)
+            writer.pack_into("6hHH", nodes_offset + (index * 16), *qmin, *qmax, node.item_id, node.item_count)
+
+    trees_offset = 0
+    if active_bvh.trees:
+        trees_offset = writer.alloc(len(active_bvh.trees) * 16, 16, relocate_pointers=False)
+        for index, tree in enumerate(active_bvh.trees):
+            qmin = _quantize_bvh_point(tree.minimum, active_bvh.center, active_bvh.quantum_inverse)
+            qmax = _quantize_bvh_point(tree.maximum, active_bvh.center, active_bvh.quantum_inverse)
+            writer.pack_into("6hHH", trees_offset + (index * 16), *qmin, *qmax, tree.node_index, tree.node_index2)
+
+    bvh_offset = writer.alloc(_BVH_BLOCK_SIZE, 16)
+    writer.pack_into("Q", bvh_offset + 0x00, _virtual(nodes_offset) if nodes_offset else 0)
+    writer.pack_into("I", bvh_offset + 0x08, len(active_bvh.nodes))
+    writer.pack_into("I", bvh_offset + 0x0C, len(active_bvh.nodes))
+    writer.pack_into("I", bvh_offset + 0x10, 0)
+    writer.pack_into("I", bvh_offset + 0x14, 0)
+    writer.pack_into("I", bvh_offset + 0x18, 0)
+    writer.pack_into("I", bvh_offset + 0x1C, 0)
+    writer.pack_into("3f", bvh_offset + 0x20, *active_bvh.minimum)
+    writer.pack_into("f", bvh_offset + 0x2C, float("nan"))
+    writer.pack_into("3f", bvh_offset + 0x30, *active_bvh.maximum)
+    writer.pack_into("f", bvh_offset + 0x3C, float("nan"))
+    writer.pack_into("3f", bvh_offset + 0x40, *active_bvh.center)
+    writer.pack_into("f", bvh_offset + 0x4C, float("nan"))
+    writer.pack_into("3f", bvh_offset + 0x50, *active_bvh.quantum_inverse)
+    writer.pack_into("f", bvh_offset + 0x5C, float("nan"))
+    writer.pack_into("3f", bvh_offset + 0x60, *active_bvh.quantum)
+    writer.pack_into("f", bvh_offset + 0x6C, float("nan"))
+    writer.pack_into("Q", bvh_offset + 0x70, _virtual(trees_offset) if trees_offset else 0)
+    writer.pack_into("H", bvh_offset + 0x78, len(active_bvh.trees))
+    writer.pack_into("H", bvh_offset + 0x7A, len(active_bvh.trees))
+    writer.pack_into("I", bvh_offset + 0x7C, 0)
+    return bvh_offset
+
+
+def _write_geometry(
+    writer: ResourceWriter,
+    offset: int,
+    bound: BoundGeometry,
+    *,
+    with_bvh: bool,
+    prepared: tuple[BoundBvh, list[BoundPolygon], list[int]] | None = None,
+) -> None:
+    polygons = bound.polygons
+    polygon_material_indices = _polygon_material_indices_for_write(bound)
+    prepared_bvh = None
+    if with_bvh:
+        if prepared is None:
+            prepared = _build_geometry_bvh(bound)
+        prepared_bvh, polygons, polygon_material_indices = prepared
+
+    center_geom = _choose_center_geom(bound)
+    quantum = (
+        bound.quantum
+        if bound.quantum != Vector3(1.0, 1.0, 1.0) or not bound.vertices
+        else _choose_quantum(bound.vertices, center_geom)
+    )
+    vertices_shrunk = _choose_vertices_shrunk(bound, with_bvh=with_bvh)
+    octants = _choose_octants(bound, vertices_shrunk, with_bvh=with_bvh)
+
+    vertices_shrunk_offset = 0
+    vertices_shrunk_count = len(vertices_shrunk) if vertices_shrunk else len(bound.vertices)
+    if vertices_shrunk:
+        vertices_shrunk_blob = _quantize_vertices(vertices_shrunk, center_geom, quantum)
+        vertices_shrunk_offset = writer.alloc(len(vertices_shrunk_blob), 16, relocate_pointers=False)
+        writer.data[vertices_shrunk_offset : vertices_shrunk_offset + len(vertices_shrunk_blob)] = vertices_shrunk_blob
+
+    vertices_offset = 0
+    if bound.vertices:
+        vertices_blob = _quantize_vertices(bound.vertices, center_geom, quantum)
+        vertices_offset = writer.alloc(len(vertices_blob), 16, relocate_pointers=False)
+        writer.data[vertices_offset : vertices_offset + len(vertices_blob)] = vertices_blob
+
+    polygons_offset = 0
+    if polygons:
+        polygons_blob = b"".join(_encode_polygon(polygon) for polygon in polygons)
+        polygons_offset = writer.alloc(len(polygons_blob), 16, relocate_pointers=False)
+        writer.data[polygons_offset : polygons_offset + len(polygons_blob)] = polygons_blob
+
+    materials_offset = 0
+    if bound.materials:
+        padded_materials = list(bound.materials)
+        while len(padded_materials) < 4:
+            padded_materials.append(BoundMaterial())
+        materials_offset = writer.alloc(len(padded_materials) * 8, 16, relocate_pointers=False)
+        for index, material in enumerate(padded_materials):
+            data1, data2 = _material_data(material)
+            writer.pack_into("II", materials_offset + (index * 8), data1, data2)
+
+    material_colours_offset = 0
+    if bound.material_colours:
+        material_colours_offset = writer.alloc(len(bound.material_colours) * 4, 4, relocate_pointers=False)
+        for index, colour in enumerate(bound.material_colours):
+            writer.pack_into("4B", material_colours_offset + (index * 4), colour.r, colour.g, colour.b, colour.a)
+
+    vertex_colours_offset = 0
+    if bound.vertex_colours:
+        vertex_colours_offset = writer.alloc(len(bound.vertex_colours) * 4, 4, relocate_pointers=False)
+        for index, colour in enumerate(bound.vertex_colours):
+            writer.pack_into("4B", vertex_colours_offset + (index * 4), colour.r, colour.g, colour.b, colour.a)
+
+    polygon_material_indices_offset = 0
+    if polygons:
+        polygon_material_indices_blob = bytes(index & 0xFF for index in polygon_material_indices)
+        polygon_material_indices_offset = writer.alloc(len(polygon_material_indices_blob), 16, relocate_pointers=False)
+        writer.data[polygon_material_indices_offset : polygon_material_indices_offset + len(polygon_material_indices_blob)] = polygon_material_indices_blob
+
+    octants_offset, octant_items_offset = _write_octants(writer, octants)
+
+    writer.pack_into("I", offset + 0x70, 0)
+    writer.pack_into("I", offset + 0x74, 0)
+    writer.pack_into("Q", offset + 0x78, _virtual(vertices_shrunk_offset) if vertices_shrunk_offset else 0)
+    writer.pack_into("H", offset + 0x80, 0)
+    writer.pack_into("H", offset + 0x82, 0)
+    writer.pack_into("I", offset + 0x84, vertices_shrunk_count)
+    writer.pack_into("Q", offset + 0x88, _virtual(polygons_offset) if polygons_offset else 0)
+    writer.pack_into("3f", offset + 0x90, *quantum)
+    writer.pack_into("f", offset + 0x9C, 0.0)
+    writer.pack_into("3f", offset + 0xA0, *center_geom)
+    writer.pack_into("f", offset + 0xAC, 0.0)
+    writer.pack_into("Q", offset + 0xB0, _virtual(vertices_offset) if vertices_offset else 0)
+    writer.pack_into("Q", offset + 0xB8, _virtual(vertex_colours_offset) if vertex_colours_offset else 0)
+    writer.pack_into("Q", offset + 0xC0, _virtual(octants_offset) if octants_offset else 0)
+    writer.pack_into("Q", offset + 0xC8, _virtual(octant_items_offset) if octant_items_offset else 0)
+    writer.pack_into("I", offset + 0xD0, len(bound.vertices))
+    writer.pack_into("I", offset + 0xD4, len(polygons))
+    writer.pack_into("I", offset + 0xD8, 0)
+    writer.pack_into("I", offset + 0xDC, 0)
+    writer.pack_into("I", offset + 0xE0, 0)
+    writer.pack_into("I", offset + 0xE4, 0)
+    writer.pack_into("I", offset + 0xE8, 0)
+    writer.pack_into("I", offset + 0xEC, 0)
+    writer.pack_into("Q", offset + 0xF0, _virtual(materials_offset) if materials_offset else 0)
+    writer.pack_into("Q", offset + 0xF8, _virtual(material_colours_offset) if material_colours_offset else 0)
+    writer.pack_into("I", offset + 0x100, 0)
+    writer.pack_into("I", offset + 0x104, 0)
+    writer.pack_into("I", offset + 0x108, 0)
+    writer.pack_into("I", offset + 0x10C, 0)
+    writer.pack_into("I", offset + 0x110, 0)
+    writer.pack_into("I", offset + 0x114, 0)
+    writer.pack_into("Q", offset + 0x118, _virtual(polygon_material_indices_offset) if polygon_material_indices_offset else 0)
+    writer.pack_into("B", offset + 0x120, len(bound.materials) & 0xFF)
+    writer.pack_into("B", offset + 0x121, len(bound.material_colours) & 0xFF)
+    writer.pack_into("H", offset + 0x122, 0)
+    writer.pack_into("I", offset + 0x124, 0)
+    writer.pack_into("I", offset + 0x128, 0)
+    writer.pack_into("I", offset + 0x12C, 0)
+    if with_bvh:
+        bvh_offset = _write_bvh(writer, bound, bvh=prepared_bvh)
+        writer.pack_into("Q", offset + 0x130, _virtual(bvh_offset))
+        writer.pack_into("I", offset + 0x138, 0)
+        writer.pack_into("I", offset + 0x13C, 0)
+        writer.pack_into("H", offset + 0x140, 0xFFFF)
+        writer.pack_into("H", offset + 0x142, 0)
+        writer.pack_into("I", offset + 0x144, 0)
+        writer.pack_into("I", offset + 0x148, 0)
+        writer.pack_into("I", offset + 0x14C, 0)
+
+
+def build_bound_system_data(
+    bound: Bound,
+    *,
+    root_pages_info: BoundResourcePagesInfo | None = None,
+    file_vft_resolver: BoundFileVftResolver | None = None,
+) -> bytes:
+    return build_bound_system_layout(
+        bound,
+        root_pages_info=root_pages_info,
+        file_vft_resolver=file_vft_resolver,
+    )[0]
+
+
+def build_bound_system_layout(
+    bound: Bound,
+    *,
+    root_pages_info: BoundResourcePagesInfo | None = None,
+    file_vft_resolver: BoundFileVftResolver | None = None,
+    _prepared_bvhs: dict[int, tuple[BoundBvh, list[BoundPolygon], list[int]]] | None = None,
+) -> tuple[bytes, list[ResourceBlockSpan]]:
+    writer = ResourceWriter(_bound_size(bound))
+    _write_bound(
+        writer,
+        bound,
+        offset=0,
+        file_vft_resolver=file_vft_resolver,
+        prepared_bvhs=_prepared_bvhs,
+    )
+    if root_pages_info is not None:
+        pages_info_offset = write_resource_pages_info(writer, root_pages_info)
+        _write_resource_file_base(
+            writer,
+            0,
+            bound,
+            pages_info_offset=pages_info_offset,
+            file_vft_resolver=file_vft_resolver,
+        )
+    return (writer.finish(), writer.block_spans)
+
+
+def write_bound_resource(
+    writer: ResourceWriter,
+    bound: Bound,
+    *,
+    ref_counts: Mapping[int, int] | None = None,
+    file_vft_resolver: BoundFileVftResolver | None = None,
+) -> int:
+    return _write_bound(
+        writer,
+        bound,
+        ref_counts=ref_counts,
+        file_vft_resolver=file_vft_resolver,
+    )
+
+
+__all__ = [
+    "BoundFileVftResolver",
+    "build_bound_system_data",
+    "build_bound_system_layout",
+    "write_bound_resource",
+]

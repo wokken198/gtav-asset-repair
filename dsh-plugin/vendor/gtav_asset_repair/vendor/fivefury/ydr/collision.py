@@ -1,0 +1,103 @@
+from __future__ import annotations
+
+import dataclasses
+from typing import TYPE_CHECKING
+
+from .. import _native as _native_backend
+from ..bounds.geometry import (
+    MAX_BOUND_TRIANGLES_PER_CHILD,
+    MAX_BOUND_VERTICES_PER_CHILD,
+    BoundTriangle,
+    build_bound_from_triangles,
+    build_composite_bound_from_chunks,
+    chunk_bound_triangles,
+)
+from ..bounds.model import BoundComposite, BoundCompositeFlags, BoundMaterial
+from ..vector import Vector3
+from .defs import YdrLod
+
+if TYPE_CHECKING:
+    from .model import Ydr, YdrMesh
+
+
+@dataclasses.dataclass(slots=True)
+class YdrCollisionStats:
+    meshes: int
+    source_vertices: int
+    source_triangles: int
+    collision_vertices: int
+    collision_triangles: int
+    children: int
+
+
+def mesh_collision_triangles(mesh: YdrMesh, *, min_area: float = 1e-10) -> list[BoundTriangle]:
+    triangles = _native_backend._bounds_collect_triangles(
+        [position.as_tuple() for position in mesh.positions],
+        mesh.indices or [],
+        min_area,
+    )
+    return [
+        tuple(Vector3.from_iterable(vertex) for vertex in triangle)
+        for triangle in triangles
+    ]
+
+
+def build_bound_from_render_geometry(
+    ydr: Ydr,
+    *,
+    lod: YdrLod | str | None = None,
+    material: BoundMaterial | None = None,
+    composite_flags: BoundCompositeFlags | None = None,
+    max_vertices_per_child: int = MAX_BOUND_VERTICES_PER_CHILD,
+    max_triangles_per_child: int = MAX_BOUND_TRIANGLES_PER_CHILD,
+) -> BoundComposite:
+    triangles = [triangle for mesh in ydr.iter_meshes(lod=lod) for triangle in mesh_collision_triangles(mesh)]
+    if not triangles:
+        raise ValueError("YDR has no valid render triangles to convert into collision")
+    return build_bound_from_triangles(
+        triangles,
+        material=material,
+        composite_flags=composite_flags,
+        max_vertices_per_child=max_vertices_per_child,
+        max_triangles_per_child=max_triangles_per_child,
+    )
+
+
+def set_bound_from_render_geometry(
+    ydr: Ydr,
+    *,
+    lod: YdrLod | str | None = None,
+    material: BoundMaterial | None = None,
+    composite_flags: BoundCompositeFlags | None = None,
+    max_vertices_per_child: int = MAX_BOUND_VERTICES_PER_CHILD,
+    max_triangles_per_child: int = MAX_BOUND_TRIANGLES_PER_CHILD,
+) -> YdrCollisionStats:
+    meshes = list(ydr.iter_meshes(lod=lod))
+    triangles = [triangle for mesh in meshes for triangle in mesh_collision_triangles(mesh)]
+    source_vertices = sum(len(mesh.positions or []) for mesh in meshes)
+    if not triangles:
+        raise ValueError("YDR has no valid render triangles to convert into collision")
+    chunks = chunk_bound_triangles(
+        triangles,
+        max_vertices_per_child=max_vertices_per_child,
+        max_triangles_per_child=max_triangles_per_child,
+    )
+    bound = build_composite_bound_from_chunks(chunks, material=material, composite_flags=composite_flags)
+    bound.validate().raise_for_errors()
+    ydr.bound = bound
+    return YdrCollisionStats(
+        meshes=len(meshes),
+        source_vertices=source_vertices,
+        source_triangles=len(triangles),
+        collision_vertices=sum(len(chunk.vertices) for chunk in chunks),
+        collision_triangles=sum(len(chunk.triangles) for chunk in chunks),
+        children=len(chunks),
+    )
+
+
+__all__ = [
+    "YdrCollisionStats",
+    "build_bound_from_render_geometry",
+    "mesh_collision_triangles",
+    "set_bound_from_render_geometry",
+]

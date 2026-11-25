@@ -1,0 +1,201 @@
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from enum import IntEnum
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .authoring.diagnostics import ValidationReport
+    from .rpf import RpfArchive, RpfFileEntry
+
+
+class GameFileType(IntEnum):
+    UNKNOWN = -1
+    YDD = 0
+    YDR = 1
+    YFT = 2
+    YMAP = 3
+    YMF = 4
+    YMT = 5
+    YTD = 6
+    YTYP = 7
+    YBN = 8
+    YCD = 9
+    YPT = 10
+    YND = 11
+    YNV = 12
+    REL = 13
+    YWR = 14
+    YVR = 15
+    GXT2 = 16
+    GTXD = 26
+    AWC = 17
+    VEHICLES = 18
+    CAR_COLS = 19
+    CAR_MOD_COLS = 20
+    CAR_VARIATIONS = 21
+    VEHICLE_LAYOUTS = 22
+    PEDS = 23
+    PED = 24
+    YED = 25
+    YFD = 27
+    HEIGHTMAP = 28
+    WATER = 29
+    WATERMAP = 29
+    MRF = 30
+    DISTANT_LIGHTS = 31
+    YPDB = 32
+    CUT = 33
+    CDR = 34
+    HANDLING = 35
+    GTA5_CACHE = 36
+    EXPRESSION_SETS = 37
+    RPF = 100
+    BINARY = 101
+
+
+_FILE_TYPE_MAP: dict[str, GameFileType] = {
+    ".ymap": GameFileType.YMAP,
+    ".ymf": GameFileType.YMF,
+    ".ymt": GameFileType.YMT,
+    ".ytyp": GameFileType.YTYP,
+    ".ytd": GameFileType.YTD,
+    ".ydr": GameFileType.YDR,
+    ".cdr": GameFileType.CDR,
+    ".ydd": GameFileType.YDD,
+    ".yft": GameFileType.YFT,
+    ".ybn": GameFileType.YBN,
+    ".ycd": GameFileType.YCD,
+    ".yed": GameFileType.YED,
+    ".ypt": GameFileType.YPT,
+    ".ynd": GameFileType.YND,
+    ".ynv": GameFileType.YNV,
+    ".rel": GameFileType.REL,
+    ".awc": GameFileType.AWC,
+    ".ywr": GameFileType.YWR,
+    ".yvr": GameFileType.YVR,
+    ".gxt2": GameFileType.GXT2,
+    ".cut": GameFileType.CUT,
+    ".rpf": GameFileType.RPF,
+}
+
+_AUDIO_REL_SUFFIXES = (
+    "_amp.dat",
+    "_game.dat",
+    "_mix.dat",
+    "_sounds.dat",
+    "_speech.dat",
+)
+
+
+def guess_game_file_type(path: str | Path, default: GameFileType = GameFileType.UNKNOWN) -> GameFileType:
+    parsed = Path(str(path))
+    normalized_name = parsed.name.lower()
+    if normalized_name.startswith("heightmap") and normalized_name.endswith(".dat"):
+        return GameFileType.HEIGHTMAP
+    if normalized_name == "gta5_cache_y.dat":
+        return GameFileType.GTA5_CACHE
+    if normalized_name.endswith(_AUDIO_REL_SUFFIXES):
+        return GameFileType.REL
+    named_meta_types = {
+        "gtxd.meta": GameFileType.GTXD,
+        "vehicles.meta": GameFileType.VEHICLES,
+        "handling.meta": GameFileType.HANDLING,
+        "carcols.meta": GameFileType.CAR_COLS,
+        "carcols.ymt": GameFileType.CAR_COLS,
+        "carmodcols.meta": GameFileType.CAR_MOD_COLS,
+        "carvariations.meta": GameFileType.CAR_VARIATIONS,
+        "carvariations.ymt": GameFileType.CAR_VARIATIONS,
+        "vehiclelayouts.meta": GameFileType.VEHICLE_LAYOUTS,
+        "peds.meta": GameFileType.PEDS,
+        "water.xml": GameFileType.WATER,
+        "expression_sets.xml": GameFileType.EXPRESSION_SETS,
+    }
+    named_type = named_meta_types.get(normalized_name)
+    if named_type is not None:
+        return named_type
+    return _FILE_TYPE_MAP.get(parsed.suffix.lower(), default)
+
+
+def _new_diagnostics() -> ValidationReport:
+    from .authoring.diagnostics import ValidationReport
+
+    return ValidationReport()
+
+
+@dataclass(slots=True)
+class GameFile:
+    path: str
+    kind: GameFileType = GameFileType.UNKNOWN
+    entry: RpfFileEntry | None = None
+    archive: RpfArchive | None = None
+    raw: bytes | None = None
+    parsed: Any = None
+    loaded: bool = False
+    metadata: dict[str, Any] = field(default_factory=dict)
+    diagnostics: ValidationReport = field(default_factory=_new_diagnostics)
+
+    @classmethod
+    def from_bytes(cls, data: bytes, *, path: str, kind: GameFileType | None = None) -> GameFile:
+        """Decode standalone bytes and retain failures in diagnostics."""
+        from .cache.io import decode_game_file_payload
+
+        result = cls(path=path, raw=data)
+        result.parsed, result.kind = decode_game_file_payload(
+            path, data, kind=kind, diagnostics=result.diagnostics
+        )
+        result.loaded = result.diagnostics.valid
+        return result
+
+    @classmethod
+    def from_path(
+        cls,
+        source: str | Path,
+        *,
+        path: str | Path | None = None,
+    ) -> GameFile:
+        source_path = Path(source)
+        if not source_path.is_file():
+            raise FileNotFoundError(source_path)
+        logical_path = str(path or source_path.name).replace("\\", "/")
+        data = source_path.read_bytes()
+        result = cls.from_bytes(data, path=logical_path)
+        result.metadata["source_path"] = str(source_path.resolve())
+        return result
+
+    @property
+    def name(self) -> str:
+        return Path(self.path).name
+
+    @property
+    def extension(self) -> str:
+        return Path(self.path).suffix.lower()
+
+    @property
+    def stem(self) -> str:
+        return Path(self.path).stem
+
+    def read_bytes(self, *, logical: bool = True) -> bytes:
+        if logical:
+            if self.entry is not None and self.archive is not None:
+                return self.archive.read_entry_bytes(self.entry, logical=True)
+            if isinstance(self.parsed, (bytes, bytearray)):
+                return bytes(self.parsed)
+            if hasattr(self.parsed, "to_bytes"):
+                return self.parsed.to_bytes()
+        if self.raw is None and self.entry is not None and self.archive is not None:
+            self.raw = self.archive.read_entry_bytes(self.entry, logical=False)
+        if self.raw is None:
+            return b""
+        return self.raw
+
+    def ensure_loaded(self, loader: Callable[[bytes], Any] | None = None) -> Any:
+        self.diagnostics.raise_for_errors()
+        if self.loaded:
+            return self.parsed
+        data = self.read_bytes(logical=True)
+        self.parsed = loader(data) if loader is not None else data
+        self.loaded = True
+        return self.parsed
