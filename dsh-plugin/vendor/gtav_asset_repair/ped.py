@@ -9,13 +9,16 @@ The checks follow what vanilla peds actually do:
 4. a component whose data is present but that no availComp slot points at is a
    dangling component (author error)
 
-Reading/writing needs a CodeWalker build with `MetaXml` and a `YmtFile.Load(byte[])`
-overload; both the 4.5 MB dev48 build and the 10 MB build shipped with ModDrop work
-(verified). `probe_core()` checks a folder by parsing a real sample and reports the
-reason when it cannot be used.
+Reading and writing go through the vendored fivefury reader (public domain, see
+`vendor/fivefury/LICENSE`), which parses CPedVariationInfo natively, so `ped
+check` and `ped fix` no longer need CodeWalker. Two quirks are handled here
+instead of in the vendored copy, to keep it upgradable: gen8 `.ydd` resources end
+with a four-byte adler32 tail that the stock deflate check rejects, and compInfos
+rows expose `compIdx`/`drawblIdx` under hashed field names.
 """
 from __future__ import annotations
 
+import copy
 import os
 import re
 import shutil
@@ -25,6 +28,8 @@ import tempfile
 import uuid
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
+
+from . import settings
 
 
 SLOTS = {
@@ -115,8 +120,96 @@ class Report:
 
 # ---------------------------------------------------------------- ydd / ymt
 
-def read_ydd(xml_path: str) -> list[tuple[str, int]]:
-    """Name and texture-slot count for every drawable, in file order."""
+_READER = None
+
+
+def _patch_deflate_tail(resource) -> None:
+    """Let the reader accept the adler32 tail gen8 `.ydd` resources carry.
+
+    A legacy drawable dictionary appends the adler32 of the decompressed payload
+    after the raw deflate stream; the stock check treats any trailing byte as
+    corruption, so every gen8 `.ydd` fails with "resource deflate stream contains
+    trailing data". Measured on Mai/MaiS/MaiT: 6,291,456 bytes out, tail ==
+    zlib.adler32(out). The patch is idempotent and only fires on that message.
+    """
+    original = getattr(resource, "_decompress_raw_resource_stream", None)
+    if original is None or getattr(original, "_gtav_tail_fix", False):
+        return
+
+    def patched(data, *args, **kwargs):
+        try:
+            return original(data, *args, **kwargs)
+        except ValueError as exc:
+            if "trailing data" not in str(exc):
+                raise
+            import zlib
+
+            engine = zlib.decompressobj(-15)
+            out = engine.decompress(bytes(data)) + engine.flush()
+            tail = engine.unused_data
+            if len(tail) == 4 and int.from_bytes(tail, "big") == zlib.adler32(out) & 0xFFFFFFFF:
+                return out
+            raise
+
+    patched._gtav_tail_fix = True
+    resource._decompress_raw_resource_stream = patched
+
+
+def _reader():
+    """Import the vendored fivefury readers once and repair the gen8 tail bug."""
+    global _READER
+    if _READER is not None:
+        return _READER
+    vendor = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor")
+    if vendor not in sys.path:
+        sys.path.insert(0, vendor)
+    from fivefury import resource as _resource
+    from fivefury.ydd import read_ydd as _read_binary_ydd
+    from fivefury.ymt import read_ymt as _read_binary_ymt
+    from fivefury.ymt import save_ymt as _save_binary_ymt
+
+    _patch_deflate_tail(_resource)
+    _READER = (_read_binary_ydd, _read_binary_ymt, _save_binary_ymt)
+    return _READER
+
+
+# Hashed compInfos field names. fivefury exposes the schema hashes verbatim, and
+# joaat("pedXml_compIdx") does not reproduce them, so they are matched by name.
+_CI_COMP = "0xD12F579D"
+_CI_DRAWBL = "0xFA1F27BF"
+
+
+def _info_pair(row) -> tuple[int, int]:
+    """(compIdx, drawblIdx) from a compInfos row, hashed names first."""
+    values = list(row.values())
+    comp = row.get(_CI_COMP, values[8] if len(values) > 8 else 0)
+    draw = row.get(_CI_DRAWBL, values[9] if len(values) > 9 else 0)
+    try:
+        return int(comp or 0), int(draw or 0)
+    except (TypeError, ValueError):
+        return 0, 0
+
+
+def _ymt_tables(content) -> tuple[list[int], list[Component], list[tuple[int, int]]]:
+    avail = [int(v) for v in (content.get("availComp") or [])]
+    # availComp is indexed by *slot* (0=head, 2=hair, ...) and stores which
+    # component sits there, so the n-th component belongs to the n-th occupied
+    # slot -- reading avail[n] treats the table as slot-per-component and shifts
+    # every name after the first gap (measured: Mai came out as 255/1/2 instead
+    # of 2/3/4).
+    data_slots = [i for i, value in enumerate(avail) if value != 255]
+    comps: list[Component] = []
+    for index, item in enumerate(content.get("aComponentData3") or []):
+        slot = data_slots[index] if index < len(data_slots) else -1
+        comp = Component(index, slot, int(item.get("numAvailTex") or 0))
+        for drawbl in item.get("aDrawblData3") or []:
+            comp.drawables.append([int(t.get("texId") or 0) for t in drawbl.get("aTexData") or []])
+        comps.append(comp)
+    infos = [_info_pair(row) for row in (content.get("compInfos") or [])]
+    return avail, comps, infos
+
+
+def _read_ydd_xml(xml_path: str) -> list[tuple[str, int]]:
     root = ET.parse(xml_path).getroot()
     out: list[tuple[str, int]] = []
     for item in root.findall("Item"):
@@ -131,13 +224,14 @@ def read_ydd(xml_path: str) -> list[tuple[str, int]]:
     return out
 
 
-def read_ymt(xml_path: str) -> tuple[list[int], list[Component], list[tuple[int, int]]]:
+def _read_ymt_xml(xml_path: str) -> tuple[list[int], list[Component], list[tuple[int, int]]]:
     root = ET.parse(xml_path).getroot()
     avail = parse_avail(root.findtext("availComp"))
+    data_slots = [i for i, value in enumerate(avail) if value != 255]
     comps: list[Component] = []
     box = root.find("aComponentData3")
     for index, item in enumerate([] if box is None else box.findall("Item")):
-        slot = avail[index] if index < len(avail) else -1
+        slot = data_slots[index] if index < len(data_slots) else -1
         comp = Component(index, slot, _int(item, "numAvailTex"))
         dd = item.find("aDrawblData3")
         for drawbl in ([] if dd is None else dd.findall("Item")):
@@ -150,6 +244,33 @@ def read_ymt(xml_path: str) -> tuple[list[int], list[Component], list[tuple[int,
     for item in ([] if node is None else node.findall("Item")):
         infos.append((_int(item, "pedXml_compIdx"), _int(item, "pedXml_drawblIdx")))
     return avail, comps, infos
+
+
+def read_ydd(path: str) -> list[tuple[str, int]]:
+    """Name and texture-slot count for every drawable, in file order.
+
+    A `.xml` path still works (CodeWalker dumps remain handy as references), but
+    anything else is read straight from the binary resource.
+    """
+    if path.lower().endswith(".xml"):
+        return _read_ydd_xml(path)
+    read_binary = _reader()[0]
+    archive = read_binary(path)
+    out: list[tuple[str, int]] = []
+    for entry in archive.drawables:
+        materials = getattr(entry.drawable, "materials", ())
+        count = sum(1 for material in materials
+                    for parameter in material.parameters if parameter.is_texture)
+        out.append((entry.name, count))
+    return out
+
+
+def read_ymt(path: str) -> tuple[list[int], list[Component], list[tuple[int, int]]]:
+    """Component tables for a CPedVariationInfo, from `.xml` or the binary."""
+    if path.lower().endswith(".xml"):
+        return _read_ymt_xml(path)
+    archive = _reader()[1](path)
+    return _ymt_tables(archive.content)
 
 
 def audit(stem: str, ydd_xml: str, ymt_xml: str, ydd: str = "", ymt: str = "") -> Report:
@@ -217,19 +338,8 @@ def audit(stem: str, ydd_xml: str, ymt_xml: str, ydd: str = "", ymt: str = "") -
 
 # ------------------------------------------------------------------ export
 
-def _run_ps1(core_dir: str, script: str, args: list[str]) -> str:
-    from .lite import _find_resource
 
-    ps1 = _find_resource(script)
-    if not ps1:
-        raise FileNotFoundError(f"helper script not found: {script}")
-    cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1] + args + ["-CoreDir", core_dir]
-    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout or "powershell failed").strip().splitlines()
-        raise RuntimeError(detail[-1] if detail else "powershell failed")
-    return proc.stdout
+
 
 
 def legacy_for(ydd: str) -> bool:
@@ -242,179 +352,114 @@ def legacy_for(ydd: str) -> bool:
         return False
 
 
-def export_pair(stem: str, ydd: str, ymt: str, out_dir: str, core_dir: str,
-                legacy: bool | None = None) -> tuple[str, str]:
-    if legacy is None:
-        legacy = legacy_for(ydd)
-    args = ["-Ydd", ydd, "-Ymt", ymt, "-OutDir", out_dir]
-    if legacy:
-        args.append("-Legacy")
-    _run_ps1(core_dir, "ped_export.ps1", args)
-    return (os.path.join(out_dir, stem + ".ydd.xml"), os.path.join(out_dir, stem + ".ymt.xml"))
+def check_pair(stem: str, ydd: str, ymt: str, core_dir: str = "", work: str = "") -> Report:
+    """Audit one ped pair straight from its binaries.
 
-
-def check_pair(stem: str, ydd: str, ymt: str, core_dir: str, work: str = "") -> Report:
-    tmp = work or tempfile.mkdtemp(prefix="pedchk-")
-    try:
-        legacy = legacy_for(ydd)
-        ydd_xml, ymt_xml = export_pair(stem, ydd, ymt, tmp, core_dir, legacy)
-        report = audit(stem, ydd_xml, ymt_xml, ydd, ymt)
-        report.legacy = legacy
-        return report
-    finally:
-        if not work:
-            shutil.rmtree(tmp, ignore_errors=True)
+    `core_dir` and `work` are kept for signature compatibility with the CLI and
+    the GUI, but the audit no longer exports anything through CodeWalker.
+    """
+    report = audit(stem, ydd, ymt, ydd, ymt)
+    report.legacy = legacy_for(ydd)
+    return report
 
 
 # -------------------------------------------------------------------- fix
 
-def _set_num_avail(comp_node, value: int) -> None:
-    tag = comp_node.find("numAvailTex")
-    if tag is None:
-        tag = ET.SubElement(comp_node, "numAvailTex")
-    tag.set("value", str(value))
+def repair_ymt(content, report: Report) -> list[str]:
+    """Fix what is provably wrong: numAvailTex and missing compInfos entries.
 
-
-def repair_xml(ymt_xml: str, report: Report, out_xml: str) -> list[str]:
-    """Fix what is provably wrong: numAvailTex and missing compInfos entries."""
-    ET.register_namespace("", "")
-    tree = ET.parse(ymt_xml)
-    root = tree.getroot()
+    Edits the decoded fivefury tree in place; `Report` already holds both the
+    declared and the measured texture count, so nothing is re-derived here.
+    """
     changes: list[str] = []
 
-    box = root.find("aComponentData3")
-    items = [] if box is None else box.findall("Item")
+    items = content.get("aComponentData3") or []
     for comp, item in zip(report.components, items):
         if comp.declared != comp.texture_sum:
-            _set_num_avail(item, comp.texture_sum)
+            item["numAvailTex"] = comp.texture_sum
             changes.append(f"{SLOTS.get(comp.slot, 'comp%d' % comp.index)}: numAvailTex "
                            f"{comp.declared} -> {comp.texture_sum}")
 
-    _avail = parse_avail(root.findtext("availComp"))
-    _data_slots = [i for i, v in enumerate(_avail) if v != 255]
-    avail_of = {comp.index: _data_slots[k] for k, comp in enumerate(report.components)
-                if k < len(_data_slots)}
+    avail = [int(v) for v in (content.get("availComp") or [])]
+    data_slots = [i for i, v in enumerate(avail) if v != 255]
+    avail_of = {comp.index: data_slots[k] for k, comp in enumerate(report.components)
+                if k < len(data_slots)}
 
-    infos = root.find("compInfos")
-    if infos is not None:
-        have = set(report.comp_infos)
-        template = None
-        for item in infos.findall("Item"):
-            template = item
-            break
-        for comp in report.components:
-            for index in range(len(comp.drawables)):
-                if (avail_of.get(comp.index, comp.slot), index) in have or comp.slot < 0:
-                    continue
-                if template is None:
-                    continue
-                new = ET.SubElement(infos, "Item")
-                for child in list(template):
-                    copy = ET.SubElement(new, child.tag, dict(child.attrib))
-                    copy.text = child.text
-                idx = new.find("pedXml_compIdx")
-                if idx is None:
-                    idx = ET.SubElement(new, "pedXml_compIdx")
-                idx.set("value", str(avail_of.get(comp.index, comp.slot)))
-                drw = new.find("pedXml_drawblIdx")
-                if drw is None:
-                    drw = ET.SubElement(new, "pedXml_drawblIdx")
-                drw.set("value", str(index))
-                changes.append(f"{SLOTS.get(comp.slot, comp.slot)}: added compInfos entry for drawable {index}")
+    infos = content.get("compInfos")
+    if infos is None:
+        infos = []
+        content["compInfos"] = infos
+    have = set(report.comp_infos)
+    template = copy.deepcopy(infos[0]) if infos else None
+    for comp in report.components:
+        for index in range(len(comp.drawables)):
+            slot = avail_of.get(comp.index, comp.slot)
+            if comp.slot < 0 or (slot, index) in have:
+                continue
+            if template is None:
+                continue
+            row = copy.deepcopy(template)
+            row[_CI_COMP] = slot
+            row[_CI_DRAWBL] = index
+            infos.append(row)
+            changes.append(f"{SLOTS.get(comp.slot, comp.slot)}: added compInfos entry for drawable {index}")
 
-    tree.write(out_xml, encoding="utf-8", xml_declaration=True)
     return changes
 
 
-def fix_pair(stem: str, ydd: str, ymt: str, core_dir: str, progress=None) -> tuple[int, str]:
-    """Audit, repair the XML, compile it back and verify. Returns (changes, out)."""
-    tmp = tempfile.mkdtemp(prefix="pedfix-")
+def fix_pair(stem: str, ydd: str, ymt: str, core_dir: str = "", progress=None) -> tuple[list[str], str]:
+    """Audit, repair the decoded tree, write it back and verify. Returns (changes, out).
+
+    A file that already passes the audit is left untouched (AGENTS.md §3), and a
+    rewritten file only replaces the original after the audit passes again on the
+    bytes actually written. The return shape matches `align_pair`, because the
+    CLI and the GUI print the individual changes.
+    """
+    if progress:
+        progress("read")
+    if not (os.stat(ymt).st_mode & 0o200):
+        raise RuntimeError("%s is read-only; clear the attribute before repairing"
+                           % os.path.basename(ymt))
+    report = audit(stem, ydd, ymt, ydd, ymt)
+    if report.ok:
+        return [], ymt
+
+    read_binary_ymt, save_binary_ymt = _reader()[1], _reader()[2]
+    archive = read_binary_ymt(ymt)
+    content = copy.deepcopy(archive.content)
+    changes = repair_ymt(content, report)
+    if not changes:
+        return [], ymt
+    if progress:
+        progress("write")
+
+    # Write beside the target and swap it in, so a failed write never leaves a
+    # half-written .ymt behind and no cross-volume copy is involved.
+    packed = ymt + ".new"
     try:
-        if progress:
-            progress("export")
-        legacy = legacy_for(ydd)
-        ydd_xml, ymt_xml = export_pair(stem, ydd, ymt, tmp, core_dir, legacy)
-        report = audit(stem, ydd_xml, ymt_xml, ydd, ymt)
-        fixed_xml = os.path.join(tmp, stem + ".ymt.xml")
-        changes = repair_xml(ymt_xml, report, fixed_xml)
-        if progress:
-            progress("pack")
-        out = os.path.join(os.path.dirname(ymt), stem + ".ymt")
-        backup = ymt + ".bak"
-        if not os.path.exists(backup):
-            shutil.copyfile(ymt, backup)
-        packed = os.path.join(tmp, stem + ".ymt")
-        pack_args = ["-Xml", fixed_xml, "-Out", packed]
-        if legacy:
-            pack_args.append("-Legacy")
-        _run_ps1(core_dir, "ymt_pack.ps1", pack_args)
+        archive.content = content
+        # `content` is a plain field; serialisation reads it back through
+        # `meta.root_value`, so both have to point at the repaired tree.
+        archive.meta.root_value = content
+        save_binary_ymt(archive, packed)
         if progress:
             progress("verify")
-        probe = os.path.join(tmp, "verify")
-        export_pair(stem, ydd, packed, probe, core_dir, legacy)
-        again = audit(stem, os.path.join(probe, stem + ".ydd.xml"),
-                      os.path.join(probe, stem + ".ymt.xml"), ydd, packed)
+        again = audit(stem, ydd, packed, ydd, packed)
         if again.problems:
-            raise RuntimeError("this CodeWalker build cannot write .ymt correctly (" + again.problems[0] + "); point the CodeWalker field at a newer build")
-        shutil.copyfile(packed, out)
-        return len(changes), out
+            raise RuntimeError("the repaired .ymt still fails the audit ("
+                               + again.problems[0] + "); nothing was written")
+        backup = ymt + ".bak"
+        if settings.keep_bak() and not os.path.exists(backup):
+            shutil.copyfile(ymt, backup)
+        os.replace(packed, ymt)
+        return changes, ymt
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        if os.path.exists(packed):
+            os.remove(packed)
 
 
-_PROBE = r"""
-param([string]$CoreDir, [string]$Sample)
-$ErrorActionPreference = 'Stop'
-$core = Join-Path $CoreDir 'CodeWalker.Core.dll'
-if (-not (Test-Path $core)) { 'missing'; exit 0 }
-try { [void][System.Reflection.Assembly]::UnsafeLoadFrom($core) } catch { 'loadfail'; exit 0 }
-if (-not ('CodeWalker.GameFiles.MetaXml' -as [type])) { 'nometa'; exit 0 }
-if ($Sample -and (Test-Path $Sample)) {
-    try {
-        $bytes = [System.IO.File]::ReadAllBytes($Sample)
-        $f = New-Object CodeWalker.GameFiles.YmtFile
-        $f.Load($bytes)
-        $warn = $null
-        $xml = [CodeWalker.GameFiles.MetaXml]::GetXml($f, [ref]$warn)
-        if ($xml -and $xml.Length -gt 200) { 'ok' } else { 'noparse' }
-    } catch { 'noparse' }
-} else {
-    'unknown'
-}
-"""
 
 
-def probe_core(folder, sample=""):
-    """Return (ok, reason) for a CodeWalker folder used by the PED page."""
-    import os
-    import subprocess
-
-    folder = folder or ""
-    core = os.path.join(folder, "CodeWalker.Core.dll")
-    if not os.path.isfile(core):
-        return False, "missing"
-    script = os.path.join(tempfile.gettempdir(), "probe_%s.ps1" % uuid.uuid4().hex[:8])
-    try:
-        with open(script, "w", encoding="utf-8") as fh:
-            fh.write(_PROBE)
-        out = subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-             "-File", script, "-CoreDir", folder, "-Sample", sample or ""],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
-            creationflags=_NO_WINDOW if hasattr(sys.modules[__name__], "_NO_WINDOW") else 0,
-        )
-        text = (out.stdout or "").strip().splitlines()
-        code = text[-1].strip().lower() if text else "error"
-        if code in ("ok", "unknown"):
-            return code == "ok", code
-        return False, code
-    except Exception as exc:                                  # noqa: BLE001
-        return False, str(exc)
-    finally:
-        try:
-            os.remove(script)
-        except OSError:
-            pass
 
 
 # ------------------------------------------------------------------- align
@@ -433,26 +478,32 @@ def _slot_of(name: str):
     return None, int(m.group("idx"))
 
 
-def read_ydd_textures(xml_path: str) -> list[tuple[str, str]]:
+def read_ydd_textures(path: str) -> list[tuple[str, str]]:
     """(drawable name, texture name) for every texture a drawable references."""
-    root = ET.parse(xml_path).getroot()
-    out = []
-    for item in root.iter("Item"):
-        name = item.findtext("Name")
-        if not name:
-            continue
-        shader = item.find("ShaderGroup")
-        if shader is None:
-            continue
-        for param in shader.iter("Item"):
-            if param.findtext("Name") != "TextureSampler":
+    out: list[tuple[str, str]] = []
+    if path.lower().endswith(".xml"):
+        root = ET.parse(path).getroot()
+        for item in root.iter("Item"):
+            name = item.findtext("Name")
+            if not name:
                 continue
-            tex = param.find("TextureName") or param.find("Name")
-            if tex is not None and tex.text:
-                out.append((name, tex.text))
-        for tex in shader.iter("TextureName"):
-            if tex.text:
-                out.append((name, tex.text))
+            shader = item.find("ShaderGroup")
+            if shader is None:
+                continue
+            for param in shader.iter("Item"):
+                if param.findtext("Name") != "TextureSampler":
+                    continue
+                tex = param.find("TextureName") or param.find("Name")
+                if tex is not None and tex.text:
+                    out.append((name, tex.text))
+            for tex in shader.iter("TextureName"):
+                if tex.text:
+                    out.append((name, tex.text))
+    else:
+        for entry in _reader()[0](path).drawables:
+            for tex in entry.drawable.texture_names:
+                if tex:
+                    out.append((entry.name, tex))
     # de-duplicate, keep order
     seen, keep = set(), []
     for pair in out:
@@ -462,10 +513,10 @@ def read_ydd_textures(xml_path: str) -> list[tuple[str, str]]:
     return keep
 
 
-def missing_textures(ydd_xml: str, ytd_names) -> list[str]:
+def missing_textures(ydd: str, ytd_names) -> list[str]:
     have = {n.lower() for n in ytd_names}
     missing = []
-    for _drawable, tex in read_ydd_textures(ydd_xml):
+    for _drawable, tex in read_ydd_textures(ydd):
         stem = tex.lower()
         if stem.endswith(".dds") or stem.endswith(".png"):
             stem = stem.rsplit(".", 1)[0]
@@ -474,12 +525,14 @@ def missing_textures(ydd_xml: str, ytd_names) -> list[str]:
     return sorted(set(missing))
 
 
-def align_xml(ymt_xml: str, ydd_total: int, out_xml: str) -> list[str]:
-    tree = ET.parse(ymt_xml)
-    root = tree.getroot()
-    box = root.find("aComponentData3")
-    items = [] if box is None else box.findall("Item")
-    avail = parse_avail(root.findtext("availComp"))
+def align_ymt(content, ydd_total: int) -> list[str]:
+    """Trim the ymt so it declares exactly the drawables the ydd has.
+
+    Keeps the 12-slot structure intact (only availComp values, per-component
+    drawable rows and compInfos rows change), because rewriting the arrays in a
+    different order drops entries into the wrong components.
+    """
+    avail = [int(v) for v in (content.get("availComp") or [])]
     while len(avail) < 12:
         avail.append(255)
     slot_of = {}
@@ -487,47 +540,30 @@ def align_xml(ymt_xml: str, ydd_total: int, out_xml: str) -> list[str]:
         if k != 255:
             slot_of[k] = slot
 
-    refs = []
-    for k, item in enumerate(items):
-        dd = item.find("aDrawblData3")
-        for di, drawbl in enumerate([] if dd is None else dd.findall("Item")):
-            tex = drawbl.find("aTexData")
-            if tex is not None and len(tex.findall("Item")):
-                refs.append((k, di))
+    items = content.get("aComponentData3") or []
+    refs = [(k, di) for k, item in enumerate(items)
+            for di, drawbl in enumerate(item.get("aDrawblData3") or [])
+            if drawbl.get("aTexData")]
     keep = refs[:ydd_total]
     kept = set(keep)
-    changes = []
+    changes: list[str] = []
     if len(keep) != len(refs):
         changes.append("keep %d of %d textured drawable(s)" % (len(keep), len(refs)))
 
     order = {}
     for k, item in enumerate(items):
-        dd = item.find("aDrawblData3")
-        if dd is None:
-            continue
-        rows = dd.findall("Item")
-        alive = []
-        mapping = {}
+        rows = item.get("aDrawblData3") or []
+        alive, mapping = [], {}
         for di, drawbl in enumerate(rows):
             if (k, di) in kept:
                 mapping[di] = len(alive)
                 alive.append(drawbl)
-        for di, drawbl in enumerate(rows):
-            if di not in mapping:
-                dd.remove(drawbl)
+        item["aDrawblData3"] = alive
         order[k] = mapping
-        total = 0
-        for drawbl in alive:
-            tex = drawbl.find("aTexData")
-            total += 0 if tex is None else len(tex.findall("Item"))
-        tag = item.find("numAvailTex")
-        if tag is None:
-            tag = ET.SubElement(item, "numAvailTex")
-        old = (tag.get("value") or tag.text or "").strip()
-        tag.set("value", str(total))
-        if tag.text is not None and tag.text.strip():
-            tag.text = str(total)
-        if old and old != str(total):
+        total = sum(len(drawbl.get("aTexData") or []) for drawbl in alive)
+        old = item.get("numAvailTex")
+        item["numAvailTex"] = total
+        if old != total:
             changes.append("component #%d numAvailTex %s -> %d" % (k, old, total))
         if not alive and k in slot_of:
             changes.append("slot %d now empty" % slot_of[k])
@@ -536,82 +572,65 @@ def align_xml(ymt_xml: str, ydd_total: int, out_xml: str) -> list[str]:
     for k in range(len(items)):
         if k not in used and k in slot_of:
             avail[slot_of[k]] = 255
-    tag = root.find("availComp")
-    if tag is not None:
-        tag.text = " ".join(str(v) for v in avail)
+    content["availComp"] = avail
 
-    box2 = root.find("compInfos")
-    if box2 is not None:
-        old_rows = {}
-        for row in box2.findall("Item"):
-            ci = _int(row, "pedXml_compIdx")
-            di = _int(row, "pedXml_drawblIdx")
-            old_rows[(ci, di)] = row
-        for row in list(box2.findall("Item")):
-            box2.remove(row)
-        for k, di in keep:
-            slot = slot_of.get(k, 255)
-            row = old_rows.get((slot, di))
-            if row is None:
-                row = ET.SubElement(box2, "Item")
-                ET.SubElement(row, "pedXml_compIdx").set("value", str(slot))
-                ET.SubElement(row, "pedXml_drawblIdx").set("value", str(order.get(k, {}).get(di, 0)))
-                ET.SubElement(row, "pedXml_vfxComps")
-            else:
-                ET.SubElement(row) if False else None
-                idx = row.find("pedXml_drawblIdx")
-                if idx is not None:
-                    idx.set("value", str(order.get(k, {}).get(di, 0)))
-            box2.append(row)
-
-    tree.write(out_xml, encoding="utf-8", xml_declaration=True)
+    old_rows = {}
+    for row in content.get("compInfos") or []:
+        old_rows[_info_pair(row)] = row
+    new_infos = []
+    for k, di in keep:
+        slot = slot_of.get(k, 255)
+        row = old_rows.get((slot, di))
+        if row is None:
+            row = {_CI_COMP: slot, _CI_DRAWBL: order.get(k, {}).get(di, 0)}
+        else:
+            row = copy.deepcopy(row)
+            row[_CI_DRAWBL] = order.get(k, {}).get(di, 0)
+        new_infos.append(row)
+    content["compInfos"] = new_infos
     return changes
 
 
-def align_pair(stem: str, ydd: str, ymt: str, core_dir: str, apply: bool = False):
+def align_pair(stem: str, ydd: str, ymt: str, core_dir: str = "", apply: bool = False):
     """Trim the ymt so it declares exactly the drawables the ydd has.
 
     Keeps the 12-slot structure intact (only availComp values, per-component
     drawable rows and compInfos rows change), because rewriting the arrays in
-    a different order makes CodeWalker repack them into the wrong components.
+    a different order drops entries into the wrong components.
     """
-    tmp = tempfile.mkdtemp(prefix="pedalign-")
+    report = audit(stem, ydd, ymt, ydd, ymt)
+    if report.ok:
+        return [], ""
+
+    if apply and not (os.stat(ymt).st_mode & 0o200):
+        raise RuntimeError("%s is read-only; clear the attribute before aligning"
+                           % os.path.basename(ymt))
+
+    read_binary_ymt, save_binary_ymt = _reader()[1], _reader()[2]
+    archive = read_binary_ymt(ymt)
+    content = copy.deepcopy(archive.content)
+    changes = align_ymt(content, len(report.ydd_drawables))
+    if not changes:
+        return [], ""
+
+    # Same write-beside-and-swap dance as fix_pair.
+    packed = ymt + ".new"
     try:
-        legacy = legacy_for(ydd)
-        ydd_xml, ymt_xml = export_pair(stem, ydd, ymt, tmp, core_dir, legacy)
-        report = audit(stem, ydd_xml, ymt_xml, ydd, ymt)
-        if report.ok:
-            return [], ""
+        archive.content = content
+        # see fix_pair: serialisation goes through meta.root_value
+        archive.meta.root_value = content
+        save_binary_ymt(archive, packed)
 
-        work = os.path.join(tmp, stem + ".ymt.xml")
-        changes = align_xml(ymt_xml, len(report.ydd_drawables), work)
-        if not changes:
-            return [], ""
-
-        packed_dir = os.path.join(tmp, "pk")
-        os.makedirs(packed_dir, exist_ok=True)
-        packed = os.path.join(packed_dir, stem + ".ymt")
-        pack_args = ["-Xml", work, "-Out", packed]
-        if legacy:
-            pack_args.append("-Legacy")
-        _run_ps1(core_dir, "ymt_pack.ps1", pack_args)
-        sub = os.path.join(tmp, "re")
-        os.makedirs(sub, exist_ok=True)
-        ydd2, ymt2 = export_pair(stem, ydd, packed, sub, core_dir, legacy)
-        again = audit(stem, ydd2, ymt2, ydd, packed)
+        again = audit(stem, ydd, packed, ydd, packed)
         if not again.ok:
-            raise RuntimeError("this CodeWalker build cannot write .ymt correctly (" + again.problems[0] + "); point the CodeWalker field at a newer build")
+            raise RuntimeError("the aligned .ymt still fails the audit ("
+                               + again.problems[0] + "); nothing was written")
         if apply:
-            if os.path.isfile(ymt) and not os.path.isfile(ymt + ".bak"):
+            if (settings.keep_bak() and os.path.isfile(ymt)
+                    and not os.path.isfile(ymt + ".bak")):
                 shutil.copy2(ymt, ymt + ".bak")
-            shutil.copy2(packed, ymt)
-        return changes, packed
+            os.replace(packed, ymt)
+        return changes, ymt
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-
-
-def _reexport(stem: str, ydd: str, ymt: str, tmp: str, core_dir: str):
-    sub = os.path.join(tmp, "re")
-    os.makedirs(sub, exist_ok=True)
-    ydd_xml, ymt_xml = export_pair(stem, ydd, ymt, sub, core_dir)
-    return ydd_xml, ymt_xml, ydd, ymt
+        if os.path.exists(packed):
+            os.remove(packed)

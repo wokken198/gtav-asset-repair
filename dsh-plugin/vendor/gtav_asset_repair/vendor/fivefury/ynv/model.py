@@ -1,0 +1,1096 @@
+from __future__ import annotations
+
+import dataclasses
+import math
+from enum import IntFlag
+from pathlib import Path
+
+from ..authoring.context import BuildContext
+from ..authoring.diagnostics import ValidationReport
+from ..common import FlexibleIntEnum
+from ..game_target import GameTarget, coerce_game_target
+from ..resource import ResourcePagesInfo
+from ..vector import Vector3
+
+YnvResourcePagesInfo = ResourcePagesInfo
+# aiSplitArray<TNavMeshPoly> keeps each allocation below 0x4000 bytes.
+# A 0x30-byte runtime polygon therefore yields 341 polygons per sub-array.
+YNV_POLY_ARRAY_BLOCK_SIZE = 0x4000 // 0x30
+
+
+def identity_4x4() -> tuple[float, ...]:
+    return (
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+    )
+
+
+class YnvContentFlags(IntFlag):
+    NONE = 0
+    POLYGONS = 1 << 0
+    PORTALS = 1 << 1
+    VEHICLE = 1 << 2
+    UNKNOWN_8 = 1 << 3
+    UNKNOWN_16 = 1 << 4
+
+
+class YnvAdjacencyType(FlexibleIntEnum):
+    NORMAL = 0
+    CLIMB_LOW = 1
+    CLIMB_HIGH = 2
+    DROPDOWN = 3
+
+
+class YnvEdgeFlags(IntFlag):
+    NONE = 0
+    ADJACENCY_DISABLED = 1 << 0
+    EDGE_PROVIDES_COVER = 1 << 1
+    HIGH_DROP_OVER_EDGE = 1 << 2
+    EXTERNAL_EDGE = 1 << 3
+
+
+class YnvPointType(FlexibleIntEnum):
+    TYPE_0 = 0
+    TYPE_1 = 1
+    TYPE_2 = 2
+    TYPE_3 = 3
+    TYPE_4 = 4
+    TYPE_5 = 5
+    UNUSED = 125
+    SPECIAL_LINK_ENDPOS = 126
+    CENTROID = 127
+    TYPE_128 = 128
+    TYPE_171 = 171
+    TYPE_254 = 254
+
+
+class YnvPortalType(FlexibleIntEnum):
+    TYPE_1 = 1
+    TYPE_2 = 2
+    TYPE_3 = 3
+
+
+class YnvPolyFlags0(IntFlag):
+    NONE = 0
+    SMALL = 1 << 0
+    LARGE = 1 << 1
+    IS_PAVEMENT = 1 << 2
+    IN_SHELTER = 1 << 3
+    RESERVED1 = 1 << 4
+    RESERVED2 = 1 << 5
+    TOO_STEEP_TO_WALK_ON = 1 << 6
+    IS_WATER = 1 << 7
+
+
+class YnvPolyFlags1(IntFlag):
+    """Bits 0-3 and 14-16 hold packed values rather than independent flags.
+
+    Read them through :attr:`YnvPoly.audio_properties` and
+    :attr:`YnvPoly.ped_density`; the per-bit members exist so the bitfield
+    still round-trips, not because a single bit means anything on its own.
+    """
+
+    NONE = 0
+    AUDIO_PROPERTIES_0 = 1 << 0
+    AUDIO_PROPERTIES_1 = 1 << 1
+    AUDIO_PROPERTIES_2 = 1 << 2
+    AUDIO_PROPERTIES_3 = 1 << 3
+    DEBUG_MARKED = 1 << 4
+    NEAR_CAR_NODE = 1 << 5
+    IS_INTERIOR = 1 << 6
+    IS_ISOLATED = 1 << 7
+    ZERO_AREA_STITCH_POLY_DLC = 1 << 8
+    NETWORK_SPAWN_CANDIDATE = 1 << 9
+    IS_ROAD = 1 << 10
+    LIES_ALONG_EDGE_OF_MESH = 1 << 11
+    IS_TRAIN_TRACK = 1 << 12
+    IS_SHALLOW_WATER = 1 << 13
+    PED_DENSITY_0 = 1 << 14
+    PED_DENSITY_1 = 1 << 15
+    PED_DENSITY_2 = 1 << 16
+
+    AUDIO_PROPERTIES_MASK = 0xF
+    PED_DENSITY_MASK = 0x7 << 14
+
+    # Legacy aliases kept for compatibility.
+    UNDERGROUND_UNK0 = 1 << 0
+    UNDERGROUND_UNK1 = 1 << 1
+    UNDERGROUND_UNK2 = 1 << 2
+    UNDERGROUND_UNK3 = 1 << 3
+    UNUSED_4 = 1 << 4
+    HAS_PATH_NODE = 1 << 5
+    INTERACTION_UNK = 1 << 7
+    IS_FLAT_GROUND = 1 << 9
+    IS_CELL_EDGE = 1 << 11
+    FOOTPATH_UNK1 = 1 << 14
+    FOOTPATH_UNK2 = 1 << 15
+    FOOTPATH_MALL = 1 << 16
+
+
+PED_DENSITY_SHIFT = 14
+MAX_PED_DENSITY = 7
+
+
+class YnvPolySlopeDirectionFlags(IntFlag):
+    NONE = 0
+    SOUTH = 1 << 0
+    SOUTHEAST = 1 << 1
+    EAST = 1 << 2
+    NORTHEAST = 1 << 3
+    NORTH = 1 << 4
+    NORTHWEST = 1 << 5
+    WEST = 1 << 6
+    SOUTHWEST = 1 << 7
+
+
+@dataclasses.dataclass(slots=True)
+class YnvListInfo:
+    vft: int
+    unknown_04h: int = 1
+    unknown_0ch: int = 0
+    unknown_24h: int = 0
+    unknown_28h: int = 0
+    unknown_2ch: int = 0
+
+
+@dataclasses.dataclass(slots=True)
+class YnvAabb:
+    min: Vector3 = dataclasses.field(default_factory=Vector3)
+    max: Vector3 = dataclasses.field(default_factory=Vector3)
+
+    @classmethod
+    def from_packed(
+        cls,
+        min_x: int,
+        max_x: int,
+        min_y: int,
+        max_y: int,
+        min_z: int,
+        max_z: int,
+    ) -> YnvAabb:
+        return cls(
+            min=Vector3(float(min_x) / 4.0, float(min_y) / 4.0, float(min_z) / 4.0),
+            max=Vector3(float(max_x) / 4.0, float(max_y) / 4.0, float(max_z) / 4.0),
+        )
+
+    def build(self) -> YnvAabb:
+        if not isinstance(self.min, Vector3) or not isinstance(self.max, Vector3):
+            raise TypeError("YNV AABB endpoints must be Vector3 instances")
+        return self
+
+    def to_packed(self) -> tuple[int, int, int, int, int, int]:
+        self.build()
+        return (
+            math.floor(self.min.x * 4.0),
+            math.ceil(self.max.x * 4.0),
+            math.floor(self.min.y * 4.0),
+            math.ceil(self.max.y * 4.0),
+            math.floor(self.min.z * 4.0),
+            math.ceil(self.max.z * 4.0),
+        )
+
+
+@dataclasses.dataclass(slots=True)
+class YnvEdgePart:
+    area_id: int = 0x3FFF
+    poly_id: int = 0x7FFF
+    adjacency_type: YnvAdjacencyType = YnvAdjacencyType.NORMAL
+    detail_flags: int = 0
+
+    @classmethod
+    def from_value(cls, value: int, adjacent_area_ids: list[int]) -> YnvEdgePart:
+        area_index = int(value) & 0x1F
+        area_id = (
+            int(adjacent_area_ids[area_index])
+            if 0 <= area_index < len(adjacent_area_ids)
+            else 0x3FFF
+        )
+        return cls(
+            area_id=area_id,
+            poly_id=(int(value) >> 5) & 0x7FFF,
+            adjacency_type=YnvAdjacencyType((int(value) >> 20) & 0x3),
+            detail_flags=(int(value) >> 22) & 0x3FF,
+        )
+
+    @property
+    def space_around_vertex(self) -> int:
+        return self.detail_flags & 0x1F
+
+    @space_around_vertex.setter
+    def space_around_vertex(self, value: int) -> None:
+        self.detail_flags = (self.detail_flags & ~0x1F) | (int(value) & 0x1F)
+
+    @property
+    def space_beyond_edge(self) -> int:
+        return (self.detail_flags >> 5) & 0x1F
+
+    @space_beyond_edge.setter
+    def space_beyond_edge(self, value: int) -> None:
+        self.detail_flags = (self.detail_flags & ~(0x1F << 5)) | (
+            (int(value) & 0x1F) << 5
+        )
+
+    def build(self) -> YnvEdgePart:
+        self.area_id = int(self.area_id) & 0x3FFF
+        self.poly_id = int(self.poly_id) & 0x7FFF
+        self.adjacency_type = YnvAdjacencyType(int(self.adjacency_type) & 0x3)
+        self.detail_flags = int(self.detail_flags) & 0x3FF
+        return self
+
+    def to_value(self, area_lookup: dict[int, int]) -> int:
+        self.build()
+        area_index = (
+            int(area_lookup.get(int(self.area_id), area_lookup.get(0x3FFF, 0))) & 0x1F
+        )
+        return (
+            area_index
+            | ((int(self.poly_id) & 0x7FFF) << 5)
+            | ((int(self.adjacency_type) & 0x3) << 20)
+            | ((int(self.detail_flags) & 0x3FF) << 22)
+        )
+
+
+@dataclasses.dataclass(slots=True)
+class YnvEdge:
+    """A persistent navmesh adjacency record.
+
+    ``poly1`` is the current adjacent polygon reference and ``poly2`` is the
+    original adjacent polygon reference retained for runtime tessellation.
+    The owning polygon is implicit in its ``index_id``/``index_count`` span;
+    it is not stored in either edge word.  Authored files must initialize both
+    references to the same neighbour (or clear both for a boundary).
+    """
+
+    poly1: YnvEdgePart = dataclasses.field(default_factory=YnvEdgePart)
+    poly2: YnvEdgePart = dataclasses.field(default_factory=YnvEdgePart)
+
+    @property
+    def references_match(self) -> bool:
+        return (
+            int(self.poly1.area_id) == int(self.poly2.area_id)
+            and int(self.poly1.poly_id) == int(self.poly2.poly_id)
+        )
+
+    @property
+    def is_boundary(self) -> bool:
+        return (
+            int(self.poly1.area_id) == 0x3FFF
+            and int(self.poly1.poly_id) == 0x7FFF
+            and int(self.poly2.area_id) == 0x3FFF
+            and int(self.poly2.poly_id) == 0x7FFF
+        )
+
+    def set_neighbor(
+        self,
+        area_id: int,
+        poly_id: int,
+        *,
+        adjacency_type: YnvAdjacencyType | int = YnvAdjacencyType.NORMAL,
+    ) -> None:
+        """Set both persistent copies of an adjacent polygon reference."""
+
+        adjacency = YnvAdjacencyType(int(adjacency_type))
+        self.poly1.area_id = int(area_id)
+        self.poly1.poly_id = int(poly_id)
+        self.poly1.adjacency_type = adjacency
+        self.poly2.area_id = int(area_id)
+        self.poly2.poly_id = int(poly_id)
+
+    def clear_neighbor(self) -> None:
+        """Turn this record into a boundary while preserving behavior bits."""
+
+        self.poly1.area_id = 0x3FFF
+        self.poly1.poly_id = 0x7FFF
+        self.poly1.adjacency_type = YnvAdjacencyType.NORMAL
+        self.poly1.detail_flags = 0
+        self.poly2.area_id = 0x3FFF
+        self.poly2.poly_id = 0x7FFF
+
+    @property
+    def flags(self) -> YnvEdgeFlags:
+        value = (int(self.poly2.adjacency_type) & 0x3) | (
+            (int(self.poly2.detail_flags) & 0x3FF) << 2
+        )
+        return YnvEdgeFlags(value)
+
+    @flags.setter
+    def flags(self, value: YnvEdgeFlags | int) -> None:
+        packed = int(value) & 0xFFF
+        self.poly2.adjacency_type = YnvAdjacencyType(packed & 0x3)
+        self.poly2.detail_flags = (packed >> 2) & 0x3FF
+
+    def build(self) -> YnvEdge:
+        self.poly1 = self.poly1.build()
+        self.poly2 = self.poly2.build()
+        return self
+
+
+@dataclasses.dataclass(slots=True)
+class YnvPoly:
+    poly_flags0: YnvPolyFlags0 = YnvPolyFlags0.NONE
+    index_id: int = 0
+    index_count: int = 0
+    area_id: int = 0
+    unknown_08h: int = 0
+    unknown_0ch: int = 0
+    unknown_10h: int = 0
+    unknown_14h: int = 0
+    cell_aabb: YnvAabb = dataclasses.field(default_factory=YnvAabb)
+    poly_flags1: YnvPolyFlags1 = YnvPolyFlags1.NONE
+    poly_flags2: int = 0
+    part_id: int = 0
+    portal_link_count: int = 0
+    portal_link_id: int = 0
+
+    @property
+    def ped_density(self) -> int:
+        """Packed pedestrian density for this polygon, 0 to 7."""
+
+        return (int(self.poly_flags1) >> PED_DENSITY_SHIFT) & MAX_PED_DENSITY
+
+    @ped_density.setter
+    def ped_density(self, value: int) -> None:
+        density = int(value)
+        if not 0 <= density <= MAX_PED_DENSITY:
+            raise ValueError(f"ped density must be between 0 and {MAX_PED_DENSITY}")
+        cleared = int(self.poly_flags1) & ~int(YnvPolyFlags1.PED_DENSITY_MASK)
+        self.poly_flags1 = YnvPolyFlags1(cleared | (density << PED_DENSITY_SHIFT))
+
+    @property
+    def audio_properties(self) -> int:
+        """Packed audio material value, 0 to 15."""
+
+        return int(self.poly_flags1) & int(YnvPolyFlags1.AUDIO_PROPERTIES_MASK)
+
+    @audio_properties.setter
+    def audio_properties(self, value: int) -> None:
+        properties = int(value)
+        if not 0 <= properties <= 0xF:
+            raise ValueError("audio properties must be between 0 and 15")
+        cleared = int(self.poly_flags1) & ~int(YnvPolyFlags1.AUDIO_PROPERTIES_MASK)
+        self.poly_flags1 = YnvPolyFlags1(cleared | properties)
+
+    @property
+    def poly_array_index(self) -> int:
+        """Index of the native aiSplitArray block that owns this polygon."""
+
+        return int(self.part_id)
+
+    @poly_array_index.setter
+    def poly_array_index(self, value: int) -> None:
+        self.part_id = int(value)
+
+    @classmethod
+    def from_packed(
+        cls,
+        *,
+        poly_flags0: int,
+        index_flags: int,
+        index_id: int,
+        area_id: int,
+        unknown_08h: int,
+        unknown_0ch: int,
+        unknown_10h: int,
+        unknown_14h: int,
+        cell_aabb: YnvAabb,
+        poly_flags1: int,
+        poly_flags2: int,
+        part_flags: int,
+    ) -> YnvPoly:
+        return cls(
+            poly_flags0=YnvPolyFlags0(int(poly_flags0)),
+            index_id=int(index_id) & 0xFFFF,
+            index_count=(int(index_flags) >> 5) & 0x7FF,
+            area_id=int(area_id) & 0xFFFF,
+            unknown_08h=int(unknown_08h) & 0xFFFFFFFF,
+            unknown_0ch=int(unknown_0ch) & 0xFFFFFFFF,
+            unknown_10h=int(unknown_10h) & 0xFFFFFFFF,
+            unknown_14h=int(unknown_14h) & 0xFFFFFFFF,
+            cell_aabb=cell_aabb,
+            poly_flags1=YnvPolyFlags1(int(poly_flags1)),
+            poly_flags2=int(poly_flags2) & 0xFFFFFFFF,
+            part_id=(int(part_flags) >> 4) & 0xFF,
+            portal_link_count=(int(part_flags) >> 12) & 0x7,
+            portal_link_id=(int(part_flags) >> 15) & 0x1FFFF,
+        )
+
+    @property
+    def index_flags(self) -> int:
+        return (int(self.index_count) & 0x7FF) << 5
+
+    @property
+    def part_flags(self) -> int:
+        return (
+            ((int(self.part_id) & 0xFF) << 4)
+            | ((int(self.portal_link_count) & 0x7) << 12)
+            | ((int(self.portal_link_id) & 0x1FFFF) << 15)
+        )
+
+    @property
+    def slope_directions(self) -> YnvPolySlopeDirectionFlags:
+        return YnvPolySlopeDirectionFlags((int(self.poly_flags2) >> 16) & 0xFF)
+
+    @slope_directions.setter
+    def slope_directions(self, value: YnvPolySlopeDirectionFlags | int) -> None:
+        self.poly_flags2 = (int(self.poly_flags2) & 0xFF00FFFF) | (
+            (int(value) & 0xFF) << 16
+        )
+
+    @property
+    def poly_flags2_low(self) -> int:
+        return int(self.poly_flags2) & 0xFFFF
+
+    def build(self) -> YnvPoly:
+        self.poly_flags0 = YnvPolyFlags0(int(self.poly_flags0) & 0xFFFF)
+        self.index_id = int(self.index_id) & 0xFFFF
+        self.index_count = int(self.index_count) & 0x7FF
+        self.area_id = int(self.area_id) & 0xFFFF
+        self.unknown_08h = int(self.unknown_08h) & 0xFFFFFFFF
+        self.unknown_0ch = int(self.unknown_0ch) & 0xFFFFFFFF
+        self.unknown_10h = int(self.unknown_10h) & 0xFFFFFFFF
+        self.unknown_14h = int(self.unknown_14h) & 0xFFFFFFFF
+        self.cell_aabb = self.cell_aabb.build()
+        self.poly_flags1 = YnvPolyFlags1(int(self.poly_flags1) & 0xFFFFFFFF)
+        self.poly_flags2 = int(self.poly_flags2) & 0xFFFFFFFF
+        self.part_id = int(self.part_id) & 0xFF
+        self.portal_link_count = int(self.portal_link_count) & 0x7
+        self.portal_link_id = int(self.portal_link_id) & 0x1FFFF
+        return self
+
+
+def _angle_byte_to_radians(value: int) -> float:
+    return (float(int(value) & 0xFF) / 255.0) * math.tau
+
+
+def _radians_to_angle_byte(value: float) -> int:
+    if not math.isfinite(value):
+        raise ValueError("YNV direction must be finite")
+    return round((float(value) % math.tau) * 255.0 / math.tau) & 0xFF
+
+
+@dataclasses.dataclass(slots=True)
+class YnvPoint:
+    position: Vector3 = dataclasses.field(default_factory=Vector3)
+    angle: int = 0
+    type: YnvPointType = YnvPointType.TYPE_0
+
+    @property
+    def direction(self) -> float:
+        return _angle_byte_to_radians(self.angle)
+
+    @direction.setter
+    def direction(self, value: float) -> None:
+        self.angle = _radians_to_angle_byte(value)
+
+    def build(self) -> YnvPoint:
+        if not isinstance(self.position, Vector3):
+            raise TypeError("YNV point position must be a Vector3")
+        self.angle = int(self.angle) & 0xFF
+        self.type = YnvPointType(int(self.type) & 0xFF)
+        return self
+
+
+@dataclasses.dataclass(slots=True)
+class YnvPortal:
+    type: YnvPortalType = YnvPortalType.TYPE_1
+    angle: int = 0
+    flags_unk: int = 0
+    position_from: Vector3 = dataclasses.field(default_factory=Vector3)
+    position_to: Vector3 = dataclasses.field(default_factory=Vector3)
+    poly_id_from1: int = 0
+    poly_id_from2: int = 0
+    poly_id_to1: int = 0
+    poly_id_to2: int = 0
+    area_id_from: int = 0
+    area_id_to: int = 0
+    area_unk: int = 0
+
+    @property
+    def direction(self) -> float:
+        return _angle_byte_to_radians(self.angle)
+
+    @direction.setter
+    def direction(self, value: float) -> None:
+        self.angle = _radians_to_angle_byte(value)
+
+    @property
+    def area_flags(self) -> int:
+        return (
+            (int(self.area_id_from) & 0x3FFF)
+            | ((int(self.area_id_to) & 0x3FFF) << 14)
+            | ((int(self.area_unk) & 0xF) << 28)
+        )
+
+    def build(self) -> YnvPortal:
+        self.type = YnvPortalType(int(self.type) & 0xFF)
+        self.angle = int(self.angle) & 0xFF
+        self.flags_unk = int(self.flags_unk) & 0xFFFF
+        if not isinstance(self.position_from, Vector3) or not isinstance(self.position_to, Vector3):
+            raise TypeError("YNV portal endpoints must be Vector3 instances")
+        self.poly_id_from1 = int(self.poly_id_from1) & 0xFFFF
+        self.poly_id_from2 = int(self.poly_id_from2) & 0xFFFF
+        self.poly_id_to1 = int(self.poly_id_to1) & 0xFFFF
+        self.poly_id_to2 = int(self.poly_id_to2) & 0xFFFF
+        self.area_id_from = int(self.area_id_from) & 0x3FFF
+        self.area_id_to = int(self.area_id_to) & 0x3FFF
+        self.area_unk = int(self.area_unk) & 0xF
+        return self
+
+
+@dataclasses.dataclass(slots=True)
+class YnvSectorData:
+    points_start_id: int = 0
+    unused_04h: int = 0
+    poly_ids: list[int] = dataclasses.field(default_factory=list)
+    points: list[YnvPoint] = dataclasses.field(default_factory=list)
+    unused_1ch: int = 0
+
+    def build(self) -> YnvSectorData:
+        self.points_start_id = int(self.points_start_id) & 0xFFFFFFFF
+        self.unused_04h = int(self.unused_04h) & 0xFFFFFFFF
+        self.poly_ids = [int(value) & 0xFFFF for value in self.poly_ids]
+        self.points = [point.build() for point in self.points]
+        self.unused_1ch = int(self.unused_1ch) & 0xFFFFFFFF
+        return self
+
+
+@dataclasses.dataclass(slots=True)
+class YnvSector:
+    aabb_min: Vector3 = dataclasses.field(default_factory=Vector3)
+    aabb_max: Vector3 = dataclasses.field(default_factory=Vector3)
+    aabb_min_w: float = float("nan")
+    aabb_max_w: float = float("nan")
+    cell_aabb: YnvAabb = dataclasses.field(default_factory=YnvAabb)
+    data: YnvSectorData | None = None
+    subtree1: YnvSector | None = None
+    subtree2: YnvSector | None = None
+    subtree3: YnvSector | None = None
+    subtree4: YnvSector | None = None
+    unused_54h: int = 0
+    unused_58h: int = 0
+    unused_5ch: int = 0
+
+    def build(self) -> YnvSector:
+        if not isinstance(self.aabb_min, Vector3) or not isinstance(self.aabb_max, Vector3):
+            raise TypeError("YNV sector bounds must be Vector3 instances")
+        self.aabb_min_w = float(self.aabb_min_w)
+        self.aabb_max_w = float(self.aabb_max_w)
+        self.cell_aabb = self.cell_aabb.build()
+        self.data = self.data.build() if self.data is not None else None
+        self.subtree1 = self.subtree1.build() if self.subtree1 is not None else None
+        self.subtree2 = self.subtree2.build() if self.subtree2 is not None else None
+        self.subtree3 = self.subtree3.build() if self.subtree3 is not None else None
+        self.subtree4 = self.subtree4.build() if self.subtree4 is not None else None
+        self.unused_54h = int(self.unused_54h) & 0xFFFFFFFF
+        self.unused_58h = int(self.unused_58h) & 0xFFFFFFFF
+        self.unused_5ch = int(self.unused_5ch) & 0xFFFFFFFF
+        return self
+
+
+@dataclasses.dataclass(slots=True)
+class Ynv:
+    version: int = 2
+    path: str = ""
+    game: GameTarget = GameTarget.GTA5
+    file_vft: int = 0x4061E7E8
+    file_unknown: int = 1
+    pages_info: YnvResourcePagesInfo = dataclasses.field(
+        default_factory=YnvResourcePagesInfo
+    )
+    content_flags: YnvContentFlags = YnvContentFlags.NONE
+    version_unk1: int = 0x00010011
+    unused_018h: int = 0
+    unused_01ch: int = 0
+    transform: tuple[float, ...] = dataclasses.field(default_factory=identity_4x4)
+    aabb_size: Vector3 = dataclasses.field(default_factory=Vector3)
+    aabb_unk: int = 0x7F800001
+    vertices: list[Vector3] = dataclasses.field(default_factory=list)
+    indices: list[int] = dataclasses.field(default_factory=list)
+    edges: list[YnvEdge] = dataclasses.field(default_factory=list)
+    polys: list[YnvPoly] = dataclasses.field(default_factory=list)
+    sector_tree: YnvSector | None = None
+    portals: list[YnvPortal] = dataclasses.field(default_factory=list)
+    portal_links: list[int] = dataclasses.field(default_factory=list)
+    adjacent_area_ids: list[int] = dataclasses.field(default_factory=list)
+    vertices_info: YnvListInfo = dataclasses.field(
+        default_factory=lambda: YnvListInfo(vft=1080158456)
+    )
+    indices_info: YnvListInfo = dataclasses.field(
+        default_factory=lambda: YnvListInfo(vft=1080158424)
+    )
+    edges_info: YnvListInfo = dataclasses.field(
+        default_factory=lambda: YnvListInfo(vft=1080158440)
+    )
+    polys_info: YnvListInfo = dataclasses.field(
+        default_factory=lambda: YnvListInfo(vft=1080158408)
+    )
+    area_id: int = 0
+    total_bytes: int = 0
+    points_count: int = 0
+    unused_154h: int = 0
+    unused_158h: int = 0
+    unused_15ch: int = 0
+    version_unk2: int = 0x85CB3561
+    unused_164h: int = 0
+    unused_168h: int = 0
+    unused_16ch: int = 0
+    system_pages_count: int = 0
+    graphics_pages_count: int = 0
+    points: list[YnvPoint] = dataclasses.field(default_factory=list)
+
+    @property
+    def cell_x(self) -> int:
+        return int(self.area_id) % 100
+
+    @property
+    def cell_y(self) -> int:
+        return int(self.area_id) // 100
+
+    def _collect_points(self, sector: YnvSector | None, sink: list[YnvPoint]) -> None:
+        if sector is None:
+            return
+        if sector.data is not None:
+            sink.extend(point.build() for point in sector.data.points)
+        self._collect_points(sector.subtree1, sink)
+        self._collect_points(sector.subtree2, sink)
+        self._collect_points(sector.subtree3, sink)
+        self._collect_points(sector.subtree4, sink)
+
+    def _reindex_sector_points(
+        self, sector: YnvSector | None, start_id: int = 0
+    ) -> int:
+        if sector is None:
+            return start_id
+        if sector.data is not None:
+            sector.data.points_start_id = int(start_id)
+            start_id += len(sector.data.points)
+        start_id = self._reindex_sector_points(sector.subtree1, start_id)
+        start_id = self._reindex_sector_points(sector.subtree2, start_id)
+        start_id = self._reindex_sector_points(sector.subtree3, start_id)
+        start_id = self._reindex_sector_points(sector.subtree4, start_id)
+        return start_id
+
+    def recalculate_content_flags(self) -> YnvContentFlags:
+        preserved = self.content_flags & (
+            YnvContentFlags.VEHICLE
+            | YnvContentFlags.UNKNOWN_8
+            | YnvContentFlags.UNKNOWN_16
+        )
+        if self.polys:
+            preserved |= YnvContentFlags.POLYGONS
+        if self.portals:
+            preserved |= YnvContentFlags.PORTALS
+        self.content_flags = YnvContentFlags(int(preserved) & 0xFFFFFFFF)
+        return self.content_flags
+
+    def _validate_sector(
+        self,
+        sector: YnvSector | None,
+        report: ValidationReport,
+        *,
+        poly_count: int,
+        points_cursor: int = 0,
+        label: str = "sector_tree",
+    ) -> int:
+        if sector is None:
+            return points_cursor
+        if sector.data is not None:
+            sector_data = sector.data
+            if int(sector_data.points_start_id) != int(points_cursor):
+                report.issue(
+                    "ynv.sector.points_start_id.mismatch",
+                    f"Expected {points_cursor}, got {sector_data.points_start_id}",
+                    path=f"{label}.data.points_start_id",
+                )
+            for index, poly_id in enumerate(sector_data.poly_ids):
+                if int(poly_id) >= int(poly_count):
+                    report.issue(
+                        "ynv.sector.poly_id.range",
+                        f"Polygon id {poly_id} is out of range for {poly_count} polygons",
+                        path=f"{label}.data.poly_ids[{index}]",
+                    )
+            points_cursor += len(sector_data.points)
+        points_cursor = self._validate_sector(
+            sector.subtree1,
+            report,
+            poly_count=poly_count,
+            points_cursor=points_cursor,
+            label=f"{label}.subtree1",
+        )
+        points_cursor = self._validate_sector(
+            sector.subtree2,
+            report,
+            poly_count=poly_count,
+            points_cursor=points_cursor,
+            label=f"{label}.subtree2",
+        )
+        points_cursor = self._validate_sector(
+            sector.subtree3,
+            report,
+            poly_count=poly_count,
+            points_cursor=points_cursor,
+            label=f"{label}.subtree3",
+        )
+        points_cursor = self._validate_sector(
+            sector.subtree4,
+            report,
+            poly_count=poly_count,
+            points_cursor=points_cursor,
+            label=f"{label}.subtree4",
+        )
+        return points_cursor
+
+    def _validate_storage_limits(self) -> ValidationReport:
+        report = ValidationReport()
+        vertex_count = len(self.vertices)
+        poly_count = len(self.polys)
+        index_count = len(self.indices)
+
+        if len(self.adjacent_area_ids) > 32:
+            report.issue(
+                "ynv.adjacent_area_ids.capacity",
+                f"At most 32 adjacent area ids are supported, got {len(self.adjacent_area_ids)}",
+                path="adjacent_area_ids",
+            )
+        if vertex_count > 0xFFFF:
+            report.issue(
+                "ynv.vertices.capacity",
+                f"At most 65535 vertices are supported, got {vertex_count}",
+                path="vertices",
+            )
+        if poly_count > 0x7FFF:
+            report.issue(
+                "ynv.polys.capacity",
+                "YNV supports at most 32767 polygons because edge polygon ids are "
+                f"15-bit and 0x7FFF is the null sentinel, got {poly_count}",
+                path="polys",
+            )
+        if index_count > 0x10000:
+            report.issue(
+                "ynv.indices.capacity",
+                "YNV supports at most 65536 polygon indices because polygon index "
+                f"offsets are 16-bit, got {index_count}",
+                path="indices",
+            )
+
+        for index, vertex_id in enumerate(self.indices):
+            if not 0 <= int(vertex_id) <= 0xFFFF:
+                report.issue(
+                    "ynv.index.storage_range",
+                    f"Value {vertex_id} does not fit the 16-bit YNV field",
+                    path=f"indices[{index}]",
+                )
+        for index, poly in enumerate(self.polys):
+            if not 0 <= int(poly.index_id) <= 0xFFFF:
+                report.issue(
+                    "ynv.poly.index_id.storage_range",
+                    f"Value {poly.index_id} does not fit the 16-bit YNV field",
+                    path=f"polys[{index}].index_id",
+                )
+        for index, edge in enumerate(self.edges):
+            if not edge.references_match:
+                report.issue(
+                    "ynv.edge.references.mismatch",
+                    "Adjacent and original polygon references disagree: "
+                    f"({edge.poly1.area_id}, {edge.poly1.poly_id}) != "
+                    f"({edge.poly2.area_id}, {edge.poly2.poly_id})",
+                    path=f"edges[{index}]",
+                )
+            for label, part in (("poly1", edge.poly1), ("poly2", edge.poly2)):
+                if not 0 <= int(part.poly_id) <= 0x7FFF:
+                    report.issue(
+                        "ynv.edge.poly_id.storage_range",
+                        f"Value {part.poly_id} does not fit the 15-bit YNV field",
+                        path=f"edges[{index}].{label}.poly_id",
+                    )
+                if not 0 <= int(part.area_id) <= 0x3FFF:
+                    report.issue(
+                        "ynv.edge.area_id.storage_range",
+                        f"Value {part.area_id} does not fit the 14-bit YNV field",
+                        path=f"edges[{index}].{label}.area_id",
+                    )
+                if not 0 <= int(part.detail_flags) <= 0x3FF:
+                    report.issue(
+                        "ynv.edge.detail_flags.storage_range",
+                        f"Value {part.detail_flags} does not fit the 10-bit YNV field",
+                        path=f"edges[{index}].{label}.detail_flags",
+                    )
+        return report
+
+    def validate(self, *, context: BuildContext | None = None) -> ValidationReport:
+        del context
+        report = self._validate_storage_limits()
+        vertex_count = len(self.vertices)
+        poly_count = len(self.polys)
+        portal_link_count = len(self.portal_links)
+
+        if self.sector_tree is None:
+            report.issue(
+                "ynv.sector_tree.required",
+                "YNV requires a sector tree",
+                path="sector_tree",
+            )
+        system_count_present = (
+            self.system_pages_count or self.pages_info.system_pages_count
+        )
+        graphics_count_present = (
+            self.graphics_pages_count or self.pages_info.graphics_pages_count
+        )
+        if (
+            system_count_present
+            and self.pages_info.system_pages_count != self.system_pages_count
+        ):
+            report.issue(
+                "ynv.pages.system_count.mismatch",
+                "ResourcePagesInfo system page count does not match the RSC7 header",
+                path="pages_info.system_pages_count",
+            )
+        if (
+            graphics_count_present
+            and self.pages_info.graphics_pages_count != self.graphics_pages_count
+        ):
+            report.issue(
+                "ynv.pages.graphics_count.mismatch",
+                "ResourcePagesInfo graphics page count does not match the RSC7 header",
+                path="pages_info.graphics_pages_count",
+            )
+        if len(self.transform) != 16:
+            report.issue(
+                "ynv.transform.length",
+                f"Transform must contain 16 floats, got {len(self.transform)}",
+                path="transform",
+            )
+        if len(self.indices) != len(self.edges):
+            report.issue(
+                "ynv.indices_edges.count_mismatch",
+                f"Expected equal counts, got {len(self.indices)} indices and {len(self.edges)} edges",
+            )
+
+        for index, vertex in enumerate(self.vertices):
+            if not isinstance(vertex, Vector3):
+                report.issue(
+                    "ynv.vertex.components",
+                    "Vertex must be a Vector3",
+                    path=f"vertices[{index}]",
+                )
+            elif not vertex.is_finite:
+                report.issue(
+                    "ynv.vertex.non_finite",
+                    "Vertex components must be finite",
+                    path=f"vertices[{index}]",
+                )
+
+        for index, vertex_id in enumerate(self.indices):
+            if int(vertex_id) >= int(vertex_count):
+                report.issue(
+                    "ynv.index.vertex_range",
+                    f"Vertex id {vertex_id} is out of range for {vertex_count} vertices",
+                    path=f"indices[{index}]",
+                )
+
+        for index, poly in enumerate(self.polys):
+            expected_array_index = index // YNV_POLY_ARRAY_BLOCK_SIZE
+            if int(poly.poly_array_index) != expected_array_index:
+                report.issue(
+                    "ynv.poly.array_index.mismatch",
+                    f"Expected native split-array block {expected_array_index}, got {poly.poly_array_index}",
+                    path=f"polys[{index}].poly_array_index",
+                )
+            is_zero_area_stitch = bool(
+                poly.poly_flags1 & YnvPolyFlags1.ZERO_AREA_STITCH_POLY_DLC
+            )
+            if not 3 <= int(poly.index_count) < 16 and not (
+                int(poly.index_count) == 2 and is_zero_area_stitch
+            ):
+                report.issue(
+                    "ynv.poly.index_count.range",
+                    f"Index count {poly.index_count} must be 3..15, or 2 for a zero-area DLC stitch polygon",
+                    path=f"polys[{index}].index_count",
+                )
+            if int(poly.index_id) + int(poly.index_count) > len(self.indices):
+                report.issue(
+                    "ynv.poly.index_span.range",
+                    f"Span [{poly.index_id}, {poly.index_id + poly.index_count}) exceeds indices length {len(self.indices)}",
+                    path=f"polys[{index}]",
+                )
+            if int(poly.index_id) + int(poly.index_count) > len(self.edges):
+                report.issue(
+                    "ynv.poly.edge_span.range",
+                    f"Span [{poly.index_id}, {poly.index_id + poly.index_count}) exceeds edges length {len(self.edges)}",
+                    path=f"polys[{index}]",
+                )
+            if int(poly.area_id) != int(self.area_id):
+                report.issue(
+                    "ynv.poly.area_id.mismatch",
+                    f"Area id {poly.area_id} does not match YNV area id {self.area_id}",
+                    path=f"polys[{index}].area_id",
+                )
+            if int(poly.portal_link_id) + int(poly.portal_link_count) > int(
+                portal_link_count
+            ):
+                report.issue(
+                    "ynv.poly.portal_link_span.range",
+                    f"Span [{poly.portal_link_id}, {poly.portal_link_id + poly.portal_link_count}) exceeds portal links length {portal_link_count}",
+                    path=f"polys[{index}]",
+                )
+
+        for index, edge in enumerate(self.edges):
+            for label, part in (("poly1", edge.poly1), ("poly2", edge.poly2)):
+                area_id = int(part.area_id)
+                poly_id = int(part.poly_id)
+                if area_id == 0x3FFF:
+                    continue
+                if area_id == int(self.area_id) and poly_id >= poly_count:
+                    report.issue(
+                        "ynv.edge.local_poly_id.range",
+                        f"Polygon id {poly_id} is out of range for {poly_count} local polygons",
+                        path=f"edges[{index}].{label}.poly_id",
+                    )
+
+        for index, portal in enumerate(self.portals):
+            for area_attr, polygon_attrs in (
+                ("area_id_from", ("poly_id_from1", "poly_id_from2")),
+                ("area_id_to", ("poly_id_to1", "poly_id_to2")),
+            ):
+                # Cross-area special links store polygon IDs in the addressed
+                # YNV, not in this file.  Only local endpoint references can
+                # be range-checked without loading the neighbouring mesh.
+                if int(getattr(portal, area_attr)) != int(self.area_id):
+                    continue
+                for attr in polygon_attrs:
+                    value = int(getattr(portal, attr))
+                    if value != 0xFFFF and value >= int(poly_count):
+                        report.issue(
+                            "ynv.portal.local_poly_id.range",
+                            f"Polygon id {value} is out of range for {poly_count} local polygons",
+                            path=f"portals[{index}].{attr}",
+                        )
+
+        if self.sector_tree is not None:
+            collected_points = self._validate_sector(
+                self.sector_tree, report, poly_count=poly_count
+            )
+            if collected_points != len(self.points):
+                report.issue(
+                    "ynv.sector.points_flattened_count.mismatch",
+                    f"Sector tree has {collected_points} points but flattened points has {len(self.points)}",
+                    path="points",
+                )
+            if collected_points != int(self.points_count):
+                report.issue(
+                    "ynv.sector.points_count.mismatch",
+                    f"Sector tree has {collected_points} points but points_count is {self.points_count}",
+                    path="points_count",
+                )
+
+        return report
+
+    def build(self) -> Ynv:
+        self.version = int(self.version)
+        self.path = str(self.path)
+        self.game = coerce_game_target(self.game)
+        self.file_vft = int(self.file_vft or 0x4061E7E8) & 0xFFFFFFFF
+        self.file_unknown = int(self.file_unknown or 1) & 0xFFFFFFFF
+        self.pages_info = dataclasses.replace(self.pages_info)
+        self.content_flags = YnvContentFlags(int(self.content_flags) & 0xFFFFFFFF)
+        self.version_unk1 = int(self.version_unk1) & 0xFFFFFFFF
+        self.unused_018h = int(self.unused_018h) & 0xFFFFFFFF
+        self.unused_01ch = int(self.unused_01ch) & 0xFFFFFFFF
+        if len(self.transform) != 16:
+            raise ValueError("YNV transform must contain 16 floats")
+        self.transform = tuple(float(value) for value in self.transform)
+        if not isinstance(self.aabb_size, Vector3):
+            raise TypeError("YNV aabb_size must be a Vector3")
+        self.aabb_unk = int(self.aabb_unk) & 0xFFFFFFFF
+        if any(not isinstance(vertex, Vector3) for vertex in self.vertices):
+            raise TypeError("YNV vertices must be Vector3 instances")
+        self.indices = [int(value) & 0xFFFF for value in self.indices]
+        self.edges = [edge.build() for edge in self.edges]
+        self.polys = [poly.build() for poly in self.polys]
+        for index, poly in enumerate(self.polys):
+            poly.poly_array_index = index // YNV_POLY_ARRAY_BLOCK_SIZE
+        self.sector_tree = (
+            self.sector_tree.build() if self.sector_tree is not None else None
+        )
+        self.portals = [portal.build() for portal in self.portals]
+        self.portal_links = [int(value) & 0xFFFF for value in self.portal_links]
+        self.adjacent_area_ids = [
+            int(value) & 0xFFFFFFFF for value in self.adjacent_area_ids[:32]
+        ]
+        self.vertices_info = dataclasses.replace(self.vertices_info)
+        self.indices_info = dataclasses.replace(self.indices_info)
+        self.edges_info = dataclasses.replace(self.edges_info)
+        self.polys_info = dataclasses.replace(self.polys_info)
+        self.area_id = int(self.area_id) & 0xFFFFFFFF
+        self.total_bytes = int(self.total_bytes) & 0xFFFFFFFF
+        self.points_count = int(self.points_count) & 0xFFFFFFFF
+        self.unused_154h = int(self.unused_154h) & 0xFFFFFFFF
+        self.unused_158h = int(self.unused_158h) & 0xFFFFFFFF
+        self.unused_15ch = int(self.unused_15ch) & 0xFFFFFFFF
+        self.version_unk2 = int(self.version_unk2) & 0xFFFFFFFF
+        self.unused_164h = int(self.unused_164h) & 0xFFFFFFFF
+        self.unused_168h = int(self.unused_168h) & 0xFFFFFFFF
+        self.unused_16ch = int(self.unused_16ch) & 0xFFFFFFFF
+        self.system_pages_count = int(self.system_pages_count)
+        self.graphics_pages_count = int(self.graphics_pages_count)
+        self._reindex_sector_points(self.sector_tree)
+        flattened_points: list[YnvPoint] = []
+        self._collect_points(self.sector_tree, flattened_points)
+        self.points = flattened_points
+        self.points_count = len(self.points)
+        if self.sector_tree is not None and all(
+            abs(component) < 1e-8 for component in self.aabb_size
+        ):
+            self.aabb_size = self.sector_tree.aabb_max - self.sector_tree.aabb_min
+        self.recalculate_content_flags()
+        return self
+
+    def to_bytes(self) -> bytes:
+        from .writer import build_ynv_bytes
+
+        return build_ynv_bytes(self)
+
+    def save(self, destination: str | Path) -> Path:
+        from ..common import atomic_write_bytes
+
+        target = atomic_write_bytes(destination, self.to_bytes())
+        self.path = str(target)
+        return target
+
+
+__all__ = [
+    "YNV_POLY_ARRAY_BLOCK_SIZE",
+    "Ynv",
+    "YnvAabb",
+    "YnvAdjacencyType",
+    "YnvContentFlags",
+    "YnvEdge",
+    "YnvEdgePart",
+    "YnvListInfo",
+    "YnvPoint",
+    "YnvPointType",
+    "YnvPoly",
+    "YnvPolyFlags0",
+    "YnvPolyFlags1",
+    "YnvPolySlopeDirectionFlags",
+    "YnvPortal",
+    "YnvPortalType",
+    "YnvResourcePagesInfo",
+    "YnvSector",
+    "YnvSectorData",
+    "identity_4x4",
+]

@@ -24,12 +24,13 @@ from tkinter import filedialog, ttk
 import numpy as np
 from PIL import Image, ImageDraw, ImageTk
 
-from . import dds as ddsmod
+from . import dds as ddsmod, settings
 from .normals import height_field, normal_from_height, shade_preview
 
 APP_TITLE = "gtav-asset-repair (Enhanced & Legacy)"
-VERSION = "0.7.0"
+VERSION = "0.7.1"
 ISSUE_URL = "https://github.com/wokken198/gtav-asset-repair/issues"
+CHANGELOG_URL = "https://github.com/wokken198/gtav-asset-repair/blob/main/CHANGELOG.md"
 
 LANG = {
     "en": {
@@ -38,7 +39,8 @@ LANG = {
         "tagline": "Enhanced & Legacy textures",
         "nav.ped": "Ped repair (YMT)",
     "nav.normal": "Normal maps (DDS)",
-        "nav.mip": "Mip check (YTD)",
+        "nav.mip": "Mip check (DDS/YTD)",
+        "nav.rpf": "Defragment (RPF)",
         "nav.ytd": "Textures (YTD)",
         "title": "Badge normal map",
         "subtitle": "pick files or a folder, tune the slope, write next to the input",
@@ -75,6 +77,8 @@ LANG = {
     "ped.clean": "所有 PED 都与 .ydd 一致",
     "ped.fixing": "正在修复 {name} ...",
     "ped.checking": "正在检查 {name} ...",
+    "page.rpf.title": "Defragment (RPF)",
+    "page.rpf.sub": "Rebuilds the RPF archive, arranges valid resources contiguously, rewrites the directory table, removes internal gaps left by deleted entries and reclaims that space on disk. Unencrypted child RPFs are also recursively defragmented.",
     "mips.files": "Files",
         "mips.add": "Add DDS / YTD",
         "mips.add_dir": "Add folder",
@@ -93,10 +97,29 @@ LANG = {
         "mips.clean": "no file needs more mips",
         "ytd.cw": "CodeWalker",
         "ytd.cw_browse": "Browse",
+        "rpf.files": "RPF archives",
+        "rpf.cw": "CodeWalker.core",
+        "rpf.browse": "Browse",
+        "rpf.deep": "Deep search",
+        "rpf.start": "Defrag RPF",
+        "rpf.stop": "Stop",
+        "rpf.add": "Add RPF",
+        "rpf.add_dir": "Add folder",
+        "rpf.cw_ok": "found",
+        "rpf.cw_missing": "not found: use Browse or Deep search",
+        "rpf.cw_found_one": "found {name}",
+        "rpf.cw_found_many": "found {name} (and {count} more)",
+        "rpf.cw_deep_busy": "searching every drive, this can take a while...",
+        "rpf.need_files": "add an .rpf on the left first",
         "ytd.cw_detect": "Detect",
         "ytd.cw_ok": "found",
-        "ytd.cw_missing": "CodeWalker folder not set. Required for: Compress YTD, Fix MIP Chains, "
-                          "Check/Fix Ped.\nYTD and MIP Analyze still work without it. "
+        "ytd.cw_found_one": "found {name}",
+        "ytd.cw_found_many": "found {name} (and {count} more builds)",
+        "ytd.cw_deep": "Deep search",
+        "ytd.cw_deep_busy": "deep search running, this can take a minute ...",
+        "ytd.cw_not_found": "no CodeWalker.Core.dll found; use Browse to point at the folder",
+        "ytd.cw_missing": "CodeWalker folder not set. Compress YTD, MIP chains, PED check/fix and "
+                          "audit all work without it; only Repack .rpf needs CodeWalker or OpenIV. "
                           "Set the folder on the Textures page.",
         "ytd.pick": "add a .ytd file first",
         "ytd.files": "YTD files",
@@ -134,9 +157,10 @@ LANG = {
         "ytd.add_dir": "Add folder",
         "ytd.mem": "memory  {before:.1f} MB -> {after:.1f} MB  ({pct}%)",
         "ytd.file": "files   {before:.1f} MB -> {after:.1f} MB  ({pct}%)",
-        "mode.cap": "Option 2 \u00b7 Ceiling",
-        "mode.tier": "Option 1 \u00b7 Snap to tier",
-        "mode.agg": "Option 3 \u00b7 Reformat (Testing in-game highly recommended)",
+        "ytd.disk_note": "saves VRAM and load time; disk space comes back only after the .rpf is repacked (OpenIV defrag)",
+        "mode.cap": "Option 2 \u00b7 Cap at the limit",
+        "mode.tier": "Option 1 \u00b7 Size down to nearest preset tier",
+        "mode.agg": "Option 3 \u00b7 Auto reformat (test in game)",
         "mode.cap.desc": "Longer than {cap} \u2192 scaled down to {cap}; smaller textures stay untouched.",
         "mode.tier.desc": "The long edge drops to the closest of 1024 / 1536 / 2048 below it.",
         "mode.agg.desc": "Cap textures at {cap} + format swaps: uncompressed → DXT5, opaque DXT5 → DXT1.",
@@ -171,6 +195,8 @@ LANG = {
         "note.mid": "",
         "note.test": "",
         "note.after": "",
+        "nav.keep_bak": "Keep .bak files",
+        "note.changelog": "What's new:",
         "note.bug": "Bug reports & inquiries:",
         "busy_other": "another page is still working - wait for it to finish",
         "idle": "idle",
@@ -211,6 +237,7 @@ LANG = {
         "nav.ped": "PED 修复（YMT）",
     "nav.normal": "法线生成（DDS）",
         "nav.mip": "MIP 检查（YTD/DDS）",
+        "nav.rpf": "Defragment (RPF)",
         "nav.ytd": "纹理压缩（YTD）",
         "title": "车标法线",
         "subtitle": "选择文件或文件夹，调整参数，结果写到输入所在目录",
@@ -221,6 +248,8 @@ LANG = {
         "page.mips.sub": "自动检测缺失的 mip 层级并填充链——修复远处的闪烁和摩尔纹，并降低渲染开销；原 .ytd/.dds 文件将备份为 .bak 文件。",
         "page.ytd.title": "纹理压缩",
         "page.ytd.sub": "批量缩小 .ytd 文件内的纹理，并将其保存回原文件夹；原文件将备份为 .bak 文件。",
+        "page.rpf.title": "Defragment (RPF)",
+        "page.rpf.sub": "重建RPF归档，把有效资源连续排布并重写目录，剔除条目遗留的内部空洞并还给磁盘。未加密的子RPF也会递归一并清理碎片。",
         "mips.files": "文件",
         "mips.add": "添加 DDS / YTD",
         "mips.add_dir": "添加文件夹",
@@ -239,10 +268,29 @@ LANG = {
         "mips.clean": "没有需要补 mip 的文件",
         "ytd.cw": "CodeWalker",
         "ytd.cw_browse": "浏览",
+        "rpf.files": "RPF 档案",
+        "rpf.cw": "CodeWalker.core",
+        "rpf.browse": "浏览",
+        "rpf.deep": "深度搜索",
+        "rpf.start": "Defrag RPF",
+        "rpf.stop": "停止",
+        "rpf.add": "添加 RPF",
+        "rpf.add_dir": "添加文件夹",
+        "rpf.cw_ok": "已找到",
+        "rpf.cw_missing": "未找到：用「浏览」或「深度搜索」",
+        "rpf.cw_found_one": "已找到 {name}",
+        "rpf.cw_found_many": "已找到 {name}（另 {count} 个）",
+        "rpf.cw_deep_busy": "正在搜索所有磁盘，可能要一会儿…",
+        "rpf.need_files": "先在左边添加一个 .rpf",
         "ytd.cw_detect": "自动探测",
         "ytd.cw_ok": "已找到",
-        "ytd.cw_missing": "未设置 CodeWalker 文件夹。压缩 YTD、修复 MIP 链、PED 检查/修复需要它。\n"
-                          "YTD 和 MIP 分析不受影响。请在「纹理」页设置文件夹。",
+        "ytd.cw_found_one": "已找到 {name}",
+        "ytd.cw_found_many": "已找到 {name}（另有 {count} 个可用构建）",
+        "ytd.cw_deep": "深度搜索",
+        "ytd.cw_deep_busy": "深度搜索中，可能要一分钟左右…",
+        "ytd.cw_not_found": "没找到 CodeWalker.Core.dll；用「浏览」手动指定文件夹",
+        "ytd.cw_missing": "未设置 CodeWalker 文件夹。压缩 YTD、修复 MIP 链、PED 检查/修复、审计都不需要它；"
+                          "只有「整理归档」需要 CodeWalker 或 OpenIV。请在「纹理」页设置文件夹。",
         "ytd.pick": "请先添加 .ytd 文件",
         "ytd.files": "YTD 文件",
         "ytd.add": "添加 YTD",
@@ -279,9 +327,10 @@ LANG = {
         "ytd.add_dir": "添加文件夹",
         "ytd.mem": "显存  {before:.1f} MB -> {after:.1f} MB  ({pct}%)",
         "ytd.file": "文件  {before:.1f} MB -> {after:.1f} MB  ({pct}%)",
-        "mode.cap": "\u65b9\u5f0f 2 \u00b7 \u5c01\u9876",
-        "mode.tier": "\u65b9\u5f0f 1 \u00b7 \u964d\u6863",
-        "mode.agg": "\u65b9\u5f0f 3 \u00b7 \u5c3a\u5bf8\u4e0a\u9650 + \u91cd\u683c\u5f0f\u5316\uff08\u5f3a\u70c8\u5efa\u8bae\u6e38\u620f\u5185\u9a8c\u8bc1\uff09",
+        "ytd.disk_note": "省下的是显存与载入时间；磁盘空间要等 .rpf 重新整理（OpenIV defrag）后才释放",
+        "mode.cap": "\u65b9\u5f0f 2 \u00b7 \u5c01\u9876\u5230\u4e0a\u9650",
+        "mode.tier": "\u65b9\u5f0f 1 \u00b7 \u5c31\u8fd1\u964d\u6863",
+        "mode.agg": "\u65b9\u5f0f 3 \u00b7 \u81ea\u52a8\u91cd\u683c\u5f0f\u5316\uff08\u8bf7\u8fdb\u6e38\u620f\u9a8c\u8bc1\uff09",
         "mode.cap.desc": "超过 {cap} \u2192 缩到 {cap}；更小的贴图不动。",
         "mode.tier.desc": "长边就近下调到 1024 / 1536 / 2048。",
         "mode.agg.desc": "将纹理尺寸上限设为 {cap}，并进行格式转换：未压缩 → DXT5，不透明 DXT5 → DXT1。",
@@ -315,6 +364,8 @@ LANG = {
         "note.mid": "",
         "note.test": "",
         "note.after": "",
+        "nav.keep_bak": "保留 .bak 备份",
+        "note.changelog": "更新日志：",
         "note.bug": "Bug 反馈与咨询：",
         "busy_other": "另一页还在运行 - 请等它结束",
         "idle": "空闲",
@@ -423,9 +474,29 @@ def _config_dir() -> str:
     return os.path.join(root, "gtav_asset_repair")
 
 
+def _legacy_config() -> str:
+    """The 0.7.0 path.  The tool used to ship as ``gtatools``."""
+    root = os.environ.get("APPDATA") or os.path.expanduser("~")
+    return os.path.join(root, "gtatools", "gui.json")
+
+
 def load_config() -> dict:
+    path = os.path.join(_config_dir(), "gui.json")
+    if not os.path.exists(path):
+        # One-shot migration: 0.7.1 renamed the folder, and a user upgrading from
+        # 0.7.0 would otherwise lose their CodeWalker path and end up looking at
+        # "set a CodeWalker folder" on every page that used to work.
+        legacy = _legacy_config()
+        if os.path.exists(legacy):
+            try:
+                with open(legacy, "r", encoding="utf-8") as fh:
+                    cfg = json.load(fh)
+                save_config(cfg)
+                return cfg
+            except Exception:
+                pass
     try:
-        with open(os.path.join(_config_dir(), "gui.json"), "r", encoding="utf-8") as fh:
+        with open(path, "r", encoding="utf-8") as fh:
             return json.load(fh)
     except Exception:
         return {}
@@ -445,8 +516,27 @@ def _font(size: int, bold: bool = False):
     return (family, size, "bold") if bold else (family, size)
 
 
+_MONO_FAMILY = None
+
+
+def _pick_mono() -> str:
+    """Cascadia Mono is the modern Windows coding face; fall back to Consolas."""
+    try:
+        import tkinter.font as tkfont
+        families = set(tkfont.families())
+    except Exception:
+        families = set()
+    for name in ("Cascadia Mono", "Cascadia Code", "Consolas"):
+        if name in families:
+            return name
+    return "Consolas"
+
+
 def _mono(size: int):
-    return ("Consolas" if sys.platform == "win32" else "Menlo", size)
+    global _MONO_FAMILY
+    if _MONO_FAMILY is None:
+        _MONO_FAMILY = _pick_mono() if sys.platform == "win32" else "Menlo"
+    return (_MONO_FAMILY, size)
 
 
 _ROUND_CACHE: dict = {}
@@ -481,7 +571,7 @@ class PillButton(tk.Canvas):
     """A rounded button drawn on a canvas: primary / secondary / ghost, with hover and press."""
 
     def __init__(self, master, app: "App", text: str, command=None, kind: str = "secondary",
-                 icon: str = ""):
+                 icon: str = "", fixed: int | None = None):
         self.app = app
         self.kind = "primary" if kind in (True, "primary") else kind
         self.command = command
@@ -492,7 +582,11 @@ class PillButton(tk.Canvas):
         self._press = False
         self._pad = int(16 * app.sx)
         self._h = int(34 * app.sx)
-        super().__init__(master, width=int(88 * app.sx), height=self._h, bg=app.c("bg"),
+        # every button shares one minimum width so a row of them reads as a set;
+        # `fixed` pins an exact width for the small file-list tools in the card header.
+        self._min = int(112 * app.sx)
+        self._fixed = int(fixed * app.sx) if fixed else 0
+        super().__init__(master, width=self._min, height=self._h, bg=app.c("bg"),
                          highlightthickness=0, bd=0, cursor="hand2", takefocus=0)
         self._pw = self._measure()
         super().configure(width=self._pw)
@@ -513,11 +607,13 @@ class PillButton(tk.Canvas):
         return (self.icon + "  " if self.icon else "") + self._text
 
     def _measure(self) -> int:
+        if self._fixed:
+            return self._fixed
         try:
             tw = int(self.tk.call("font", "measure", self._font(), self._label()))
         except tk.TclError:
             tw = len(self._label()) * 7
-        return int(max(88 * self.app.sx, tw + self._pad * 2))
+        return int(max(self._min, tw + self._pad * 2))
 
     def _colors(self):
         c = self.app.c
@@ -529,6 +625,12 @@ class PillButton(tk.Canvas):
         if self.kind == "ghost":
             fill = c("hover") if (self._hover or self._press) else c("bg")
             return fill, c("fg") if self._hover else c("dim"), None
+        # Stop and other "not the main action" buttons: plain grey, so they never
+        # compete with the green primary next to them.
+        if self.kind == "neutral":
+            live = self._hover or self._press
+            return (c("hover") if live else c("inset"),
+                    c("fg") if live else c("dim"), c("stroke"))
         # secondaries sit on a faint green so they read as buttons at rest and
         # deepen toward the accent under the pointer.
         if self._press:
@@ -719,9 +821,18 @@ class Switch(tk.Canvas):
         step(0)
 
     def _click(self, event):
-        mid = self._each + self._track / 2
-        idx = 0 if event.x < mid else 1
-        idx = max(0, min(len(self.options) - 1, idx))
+        # Labels pick their own side; the track in the middle toggles, so clicking
+        # the same spot repeatedly always flips the switch (it used to be a no-op
+        # once the knob reached the right-hand side).
+        last = len(self.options) - 1
+        if event.x <= self._each:
+            idx = 0
+        elif event.x >= self._each + self._track:
+            idx = last
+        else:
+            cur = [i for i, (code, _label) in enumerate(self.options) if code == self.value]
+            idx = ((cur[0] if cur else 0) + 1) % (last + 1)
+        idx = max(0, min(last, idx))
         code = self.options[idx][0]
         if code != self.value:
             self.value = code
@@ -1180,16 +1291,18 @@ class App(tk.Tk):
             self.texconv = ""
 
         self.title(APP_TITLE)
-        # Pin the whole layout to 96 dpi: widgets are laid out in pixels, so letting Tk recompute
-        # fonts from a 120/144 dpi monitor makes them grow inside a fixed-size window and clip.
+        # Lay the widgets out in physical pixels and let tk scale the point sizes by the
+        # same factor: both the boxes and the glyphs grow together, so text stays sharp
+        # on a 125%/150% display instead of being bitmap-stretched by the compositor.
+        self.sx = _dpi_scale()
         try:
-            self.tk.call("tk", "scaling", 96.0 / 72.0)
+            self.tk.call("tk", "scaling", self.sx * 96.0 / 72.0)
         except Exception:
             pass
-        self.sx = 1.0
         self.geometry("%dx%d" % (min(int(1360 * self.sx), self.winfo_screenwidth() - 40),
                                   min(int(820 * self.sx), self.winfo_screenheight() - 80)))
-        self.minsize(int(1120 * self.sx), int(700 * self.sx))
+        self.minsize(min(int(1120 * self.sx), self.winfo_screenwidth() - 80),
+                     min(int(700 * self.sx), self.winfo_screenheight() - 120))
         self.configure(bg=self.c("bg"))
         self._set_icon()
         self.report_callback_exception = self._on_callback_error
@@ -1270,6 +1383,10 @@ class App(tk.Tk):
         w, h = self.winfo_width(), self.winfo_height()
         if w < 40 or h < 40:
             return
+        key = (self.theme, w, h)
+        if getattr(self, "_bg_key", None) == key and getattr(self, "_bg_photo", None) is not None:
+            return
+        self._bg_key = key
         radius = 24 * self.sx
         line = "#e2e9f3" if self.theme == "light" else "#151a21"
         base = Image.new("RGB", (w, h), self.c("bg"))
@@ -1392,7 +1509,7 @@ class App(tk.Tk):
                   bordercolor=[("focus", self.c("stroke_hi"))])
         style.configure("Pav.Horizontal.TProgressbar", background=self.c("accent"),
                         troughcolor=self.c("track"), bordercolor=self.c("track"),
-                        lightcolor=self.c("accent"), darkcolor=self.c("accent"), thickness=6)
+                        lightcolor=self.c("accent"), darkcolor=self.c("accent"), thickness=2)
         style.configure("Pav.Horizontal.TScale", background=self.c("card"),
                         troughcolor=self.c("track"), bordercolor=self.c("card"),
                         lightcolor=self.c("accent"), darkcolor=self.c("accent"))
@@ -1412,13 +1529,29 @@ class App(tk.Tk):
         self.note.insert("end", t("note.after") + "\n\n")
         self.note.insert("end", t("note.bug") + "\n")
         self.note.insert("end", ISSUE_URL, "link")
+        self.note.insert("end", "\n" + t("note.changelog") + " ")
+        self.note.insert("end", "CHANGELOG", "clink")
         self.note.configure(state="disabled")
         self.note.tag_configure("b", font=_font(8, True), foreground=self.c("dim"))
         self.note.tag_configure("link", underline=True, foreground=self.c("accent"))
+        self.note.tag_configure("clink", underline=True, foreground=self.c("accent"))
+
+    def _toggle_bak(self):
+        on = not settings.keep_bak()
+        settings.set_keep_bak(on)
+        self.cfg["keep_bak"] = on
+        save_config(self.cfg)
+        self.bak_btn.kind = "primary" if on else "secondary"
+        self.bak_btn._draw()
 
     def _note_click(self, event):
         idx = self.note.index(f"@{event.x},{event.y}")
-        if "link" in self.note.tag_names(idx):
+        tags = self.note.tag_names(idx)
+        if "clink" in tags:
+            import webbrowser
+            webbrowser.open(CHANGELOG_URL)
+            return "break"
+        if "link" in tags:
             import webbrowser
             webbrowser.open(ISSUE_URL)
             return "break"
@@ -1551,8 +1684,10 @@ class App(tk.Tk):
             fg = self.c("fg") if active else (self.c("dim") if hover else self.c("faint"))
             row.create_text(int(16 * self.sx), h // 2, text=row._icon, anchor="w",
                             fill=self.c("accent") if active else fg, font=_font(9))
+            # the active row is bold, which is wider than the plain one; leave enough
+            # room that a bold label never wraps
             row.create_text(int(34 * self.sx), h // 2, text=self.t(row._key), anchor="w",
-                            fill=fg, font=_font(10, active), width=int(148 * self.sx),
+                            fill=fg, font=_font(10, active), width=int(178 * self.sx),
                             justify="left")
 
     def _save(self):
@@ -1565,9 +1700,11 @@ class App(tk.Tk):
         save_config(self.cfg)
 
     # ---------------------------------------------------------------- widgets
-    def _button(self, master, text, command, primary=False, kind: str | None = None, icon: str = ""):
+    def _button(self, master, text, command, primary=False, kind: str | None = None,
+                icon: str = "", fixed: int | None = None):
         btn = PillButton(master, self, text, command,
-                         kind=kind or ("primary" if primary else "secondary"), icon=icon)
+                         kind=kind or ("primary" if primary else "secondary"), icon=icon,
+                         fixed=fixed)
         for key, value in LANG[self.lang].items():
             if value == text:
                 self.bind_text(btn, key)
@@ -1600,8 +1737,9 @@ class App(tk.Tk):
 
         self.nav_rows = {}
         self._nav_hover = None
-        icons = {"normals": "◆", "ytd": "▤", "mips": "▥", "ped": "⚙"}
-        for page, key in (("normals", "nav.normal"), ("ytd", "nav.ytd"), ("mips", "nav.mip"), ("ped", "nav.ped")):
+        icons = {"normals": "◆", "ytd": "▤", "mips": "▥", "ped": "⚙", "rpf": "▣"}
+        for page, key in (("normals", "nav.normal"), ("ytd", "nav.ytd"), ("mips", "nav.mip"),
+                          ("ped", "nav.ped"), ("rpf", "nav.rpf")):
             row = tk.Canvas(self._nav, bg=self.c("nav"), highlightthickness=0, bd=0,
                             height=int(36 * self.sx), width=int(192 * self.sx))
             row.pack(fill="x", padx=10, pady=1)
@@ -1616,15 +1754,24 @@ class App(tk.Tk):
         ver.pack(side="bottom", anchor="w", padx=18, pady=14)
         self.style_widget(ver, "nav", "faint")
 
-        self.note = tk.Text(self._nav, wrap="word", width=int(26 * self.sx), height=7,
+        self.note = tk.Text(self._nav, wrap="word", width=int(26 * self.sx), height=9,
                             bg=self.c("nav"), fg=self.c("faint"), font=_font(8),
                             relief="flat", bd=0, highlightthickness=0, padx=0, pady=0,
                             spacing1=0, spacing3=1, cursor="arrow", takefocus=0)
         self.note.pack(side="bottom", anchor="w", padx=18, pady=(0, 8))
         self.note.tag_configure("b", font=_font(8, True), foreground=self.c("dim"))
         self.note.tag_configure("link", underline=True, foreground=self.c("accent"))
+        self.note.tag_configure("clink", underline=True, foreground=self.c("accent"))
         self.note.bind("<Button-1>", self._note_click)
         self._build_note()
+
+        # Keep/overwrite .bak: a single toggle, because batch runs leave a pile of
+        # backups next to the archives and every writer honours the same value.
+        settings.set_keep_bak(bool(self.cfg.get("keep_bak", True)))
+        self.bak_btn = self._button(self._nav, "", self._toggle_bak,
+                                    primary=settings.keep_bak())
+        self.bak_btn.pack(side="bottom", anchor="w", padx=16, pady=(0, 6))
+        self.bind_text(self.bak_btn, "nav.keep_bak")
 
         self._bg_canvas = tk.Canvas(self, bg=self.c("bg"), highlightthickness=0, bd=0)
         self._bg_canvas.place(x=0, y=0, relwidth=1, relheight=1)
@@ -1693,14 +1840,14 @@ class App(tk.Tk):
         tools = tk.Frame(files.head, bg=self.c("card"))
         tools.pack(side="right")
         self.style_widget(tools, "card")
-        self.bind_text(self._button(tools, "", self.clear_files), "clear").pack(side="right")
-        self.bind_text(self._button(tools, "", self.remove_selected), "remove").pack(side="right", padx=(0, 6))
+        self.bind_text(self._button(tools, "", self.clear_files, fixed=96), "clear").pack(side="right")
+        self.bind_text(self._button(tools, "", self.remove_selected, fixed=96), "remove").pack(side="right", padx=(0, 6))
 
         btnrow = tk.Frame(files.body, bg=self.c("card"))
         btnrow.pack(fill="x")
         self.style_widget(btnrow, "card")
-        self.bind_text(self._button(btnrow, "", self.pick_files, primary=True), "add_files").pack(side="left")
-        self.bind_text(self._button(btnrow, "", self.pick_folder), "add_folder").pack(side="left", padx=8)
+        self.bind_text(self._button(btnrow, "", self.pick_folder, fixed=128), "add_folder").pack(side="right")
+        self.bind_text(self._button(btnrow, "", self.pick_files, primary=True, fixed=128), "add_files").pack(side="right", padx=(0, 8))
 
         wrap = tk.Frame(files.body, bg=self.c("inset"), highlightbackground=self.c("stroke"),
                         highlightthickness=1)
@@ -1720,17 +1867,27 @@ class App(tk.Tk):
         self.preview_canvases = []
         pane = prev.body
         pane.columnconfigure(0, weight=1)
-        for row, key in enumerate(("prev.src", "prev.nrm", "prev.lit")):
-            cap = self.bind_text(tk.Label(pane, text="", bg=self.c("card"), fg=self.c("faint"),
-                                          font=_font(8, True), anchor="w"), key)
-            cap.grid(row=row * 2, column=0, sticky="ew", pady=(0, 2))
-            self.style_widget(cap, "card", "faint")
+        for i, key in enumerate(("prev.src", "prev.nrm", "prev.lit")):
+            if i == 0:
+                # the first caption rides on the card title row: that buys the
+                # three canvases one whole line of extra height
+                cap = self.bind_text(tk.Label(prev.head, text="", bg=self.c("card"),
+                                              fg=self.c("faint"), font=_font(8, True),
+                                              anchor="center"), key)
+                cap.pack(side="left", fill="x", expand=True)
+                self.style_widget(cap, "card", "faint")
             canvas = tk.Canvas(pane, bg=self.c("inset"), highlightthickness=1,
                                highlightbackground=self.c("stroke"), width=10, height=20)
-            canvas.grid(row=row * 2 + 1, column=0, sticky="nsew", pady=(0, 8))
-            pane.rowconfigure(row * 2 + 1, weight=1, uniform="prev")
+            canvas.grid(row=i * 2, column=0, sticky="nsew", pady=(0, 6))
+            pane.rowconfigure(i * 2, weight=1, uniform="prev")
             canvas.bind("<Configure>", lambda _e: self._schedule_preview())
             self.preview_canvases.append(canvas)
+            if i:
+                cap = self.bind_text(tk.Label(pane, text="", bg=self.c("card"),
+                                              fg=self.c("faint"), font=_font(8, True),
+                                              anchor="center"), key)
+                cap.grid(row=i * 2 - 1, column=0, sticky="ew", pady=(0, 2))
+                self.style_widget(cap, "card", "faint")
         self._preview_job = None
         self._preview_photo = None
 
@@ -1780,25 +1937,35 @@ class App(tk.Tk):
         self.footer = footer
         footer.pack(fill="x", pady=(12, 0))
         self.style_widget(footer, "bg")
-        self.run_btn = self.bind_text(self._button(footer, "", self.run, primary=True), "generate")
+        # buttons on one row, the progress bar underneath them: the same shape every
+        # other page uses, so the footer reads the same wherever you are
+        row = tk.Frame(footer, bg=self.c("bg"))
+        row.pack(fill="x")
+        self.style_widget(row, "bg")
+        self.run_btn = self.bind_text(self._button(row, "", self.run, primary=True), "generate")
         self.run_btn.pack(side="left")
-        self.cancel_btn = self.bind_text(self._button(footer, "", self.cancel_run), "cancel")
+        self.cancel_btn = self.bind_text(self._button(row, "", self.cancel_run), "cancel")
         self.cancel_btn.pack(side="left", padx=8)
         self.cancel_btn.configure(state="disabled")
         # the footnote block above already carries this text; keep the label but leave it empty
-        self.hint = tk.Label(footer, text="", bg=self.c("bg"), fg=self.c("faint"),
+        self.hint = tk.Label(row, text="", bg=self.c("bg"), fg=self.c("faint"),
                              font=_font(8), anchor="w")
         self.hint.pack(side="left", padx=(14, 0))
         self.style_widget(self.hint, "bg", "faint")
-        self.progress = ttk.Progressbar(footer, style="Pav.Horizontal.TProgressbar",
-                                        orient="horizontal", mode="determinate")
-        self.progress.pack(side="left", fill="x", expand=True, padx=14)
-        self.status_dot = Dot(footer, self, "faint", 8)
+        self.status_dot = Dot(row, self, "faint", 8)
         self.status_dot.pack(side="right", padx=(0, 6))
-        self.status = tk.Label(footer, text="", bg=self.c("bg"), fg=self.c("faint"),
+        self.status = tk.Label(row, text="", bg=self.c("bg"), fg=self.c("faint"),
                                font=_font(9), anchor="e")
         self.status.pack(side="right")
         self.style_widget(self.status, "bg", "faint")
+        # Same shape as every other page: a flat track with an accent fill placed by
+        # relwidth.  ttk.Progressbar draws its own chrome and ignores the theme, which
+        # made this page look different from the rest (and at thickness=2 it was
+        # invisible altogether).
+        self.progress = tk.Frame(row, bg=self.c("track"), height=6)
+        self.progress.pack(side="left", fill="x", expand=True, padx=(12, 8))
+        self.bar = tk.Frame(self.progress, bg=self.c("accent"), height=6)
+        self.bar.place(x=0, y=0, relwidth=0.0, relheight=1.0)
 
     def set_status(self, text: str, kind: str = "faint"):
         """kind: faint (idle) / dim (working) / green (ok) / danger (failed) / warning."""
@@ -1812,13 +1979,13 @@ class App(tk.Tk):
     # ------------------------------------------------------------ page switching
     def show_page(self, name):
         if name not in self.pages:
-            from .gui_pages import build_mips_page, build_ped_page, build_ytd_page
+            from .gui_pages import build_mips_page, build_ped_page, build_rpf_page, build_ytd_page
 
             page = tk.Frame(self.page_host, bg=self.c("bg"))
             self.style_widget(page, "bg")
             self.pages[name] = page
             builder = {"mips": build_mips_page, "ped": build_ped_page,
-                       "ytd": build_ytd_page}[name]
+                       "rpf": build_rpf_page, "ytd": build_ytd_page}[name]
             holder = builder(self, page)
             self.page_objects[name] = holder.owner
         for key, page in self.pages.items():
@@ -2102,7 +2269,7 @@ class App(tk.Tk):
         self.cancel.clear()
         self.run_btn.configure(state="disabled")
         self.cancel_btn.configure(state="normal")
-        self.progress.configure(value=0, maximum=len(self.files))
+        self.bar.place_configure(relwidth=0.0)
         self.set_status(self.t("processing", n=0), "dim")
         first = self.files[0]
         out_dir = os.path.dirname(os.path.abspath(first))
@@ -2208,7 +2375,7 @@ class App(tk.Tk):
                 kind, payload = self.queue.get_nowait()
                 if kind == "progress":
                     idx, total = payload
-                    self.progress.configure(value=idx)
+                    self.bar.place_configure(relwidth=min(1.0, idx / float(max(1, total))))
                     self.set_status(self.t("processing", n=idx), "dim")
                 elif kind == "ok":
                     src, dest = payload
@@ -2234,26 +2401,52 @@ class App(tk.Tk):
         self.after(80, self._pump)
 
 
-def _fix_dpi():
-    """Keep the layout identical to the source runs.
+def _enable_dpi_awareness():
+    """Tell Windows to render the window at the real monitor DPI.
 
-    PyInstaller ships a DPI-aware manifest, so on a 125% display Tk lays the UI out in
-    physical pixels and the fixed-width panels get clipped. Declaring the process
-    DPI-unaware makes Windows scale the whole window instead, which matches what the
-    source build looks like. Proper per-monitor scaling is a later task.
+    A DPI-unaware process gets its whole window bitmap-stretched by the compositor on a
+    125%/150% display, which is exactly what makes the text look fuzzy. Declaring
+    per-monitor v2 lets Tk draw the glyphs at native resolution; the layout then scales
+    itself through ``App.sx`` and ``tk scaling`` instead of being stretched afterwards.
     """
     if sys.platform != "win32":
         return
+    import ctypes
+
+    for call in (lambda: ctypes.windll.user32.SetProcessDpiAwarenessContext(-4),
+                 lambda: ctypes.windll.shcore.SetProcessDpiAwareness(2),
+                 lambda: ctypes.windll.shcore.SetProcessDpiAwareness(1),
+                 lambda: ctypes.windll.user32.SetProcessDPIAware()):
+        try:
+            if call():
+                return
+        except Exception:
+            continue
+
+
+# Kept for the packaged entry point and any older import site.
+_fix_dpi = _enable_dpi_awareness
+
+
+def _dpi_scale():
+    """Physical pixels per logical pixel, 1.0 on a 96 dpi display."""
+    if sys.platform != "win32":
+        return 1.0
     try:
         import ctypes
 
-        ctypes.windll.user32.SetProcessDpiAwarenessContext(1)  # system DPI aware: no bitmap stretching
+        hdc = ctypes.windll.user32.GetDC(0)
+        try:
+            dpi = ctypes.windll.gdi32.GetDeviceCaps(hdc, 88)  # LOGPIXELSX
+        finally:
+            ctypes.windll.user32.ReleaseDC(0, hdc)
+        return max(1.0, min(3.0, dpi / 96.0))
     except Exception:
-        pass
+        return 1.0
 
 
 def main():
-    _fix_dpi()
+    _enable_dpi_awareness()
     App().mainloop()
 
 

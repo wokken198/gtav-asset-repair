@@ -1,8 +1,9 @@
 """The MIP check and YTD compression pages.
 
 Both pages share one idea: pick files on the left, read what is inside on the
-right.  Reading a dictionary costs a PowerShell + CodeWalker round trip, so it
-always happens on worker threads and the UI stays responsive.
+right.  Reading a dictionary runs on worker threads so the UI stays responsive.
+The only step that still needs CodeWalker is repacking an .rpf, because that is
+what makes the freed space reach disk.
 """
 
 import os
@@ -15,15 +16,13 @@ from tkinter import ttk
 from concurrent.futures import ThreadPoolExecutor
 from tkinter import filedialog
 
-from . import cw, lite, ytd as ytdmod
+from . import lite, rpf, settings, ytd as ytdmod
 from .gui import Card, FileList, HelpDot, _font, _mono
 
 SUFFIX_TEX = (".dds", ".ytd")
 SUFFIX_YTD = (".ytd",)
 
 
-def _core_ok(folder):
-    return bool(folder) and os.path.isfile(os.path.join(folder, "CodeWalker.Core.dll"))
 
 
 def _size_of(path):
@@ -102,6 +101,10 @@ class _Page:
 
         self.body = tk.Frame(self.frame, bg=app.c("bg"))
         self.body.pack(fill="both", expand=True)
+        # Do not let the tallest column drive the page height: every page then fills the
+        # window identically instead of the report-heavy pages pushing the file column
+        # taller (or shorter) than the others.
+        self.body.pack_propagate(False)
         app.style_widget(self.body, "bg")
 
         # left: files
@@ -117,18 +120,16 @@ class _Page:
         self.head_tools = tk.Frame(self.card.head, bg=app.c("card"))
         self.head_tools.pack(side="right")
         app.style_widget(self.head_tools, "card")
-        self.btn_clear = app._button(self.head_tools, app.t("clear"), self.clear)
+        self.btn_clear = app._button(self.head_tools, app.t("clear"), self.clear, fixed=96)
         self.btn_clear.pack(side="right")
         app.bind_text(self.btn_clear, "clear")
-        self.btn_remove = app._button(self.head_tools, app.t("remove"), self.remove_selected)
+        self.btn_remove = app._button(self.head_tools, app.t("remove"), self.remove_selected, fixed=96)
         self.btn_remove.pack(side="right", padx=(0, 6))
         app.bind_text(self.btn_remove, "remove")
 
         self.btnrow = tk.Frame(self.card.body, bg=app.c("card"))
         self.btnrow.pack(fill="x")
         app.style_widget(self.btnrow, "card")
-        self.btnrow2 = tk.Frame(self.card.body, bg=app.c("card"))
-        app.style_widget(self.btnrow2, "card")
 
         wrap = tk.Frame(self.card.body, bg=app.c("inset"),
                         highlightbackground=app.c("stroke"), highlightthickness=1)
@@ -389,6 +390,9 @@ class ModePanel(tk.Frame):
         self._bind_card(tier, lite.MODE_TIER)
         self.card_tier = tier
 
+        # Mode 4 sits under mode 1 and spans the same width: it never resizes, so it has
+        # no business sharing the long-edge column.
+
         # three equal blocks side by side: the row is fixed height and splits its
         # width three ways, so the cards stay the same size whatever the window does
         # mode 1 across the top; below it a narrow "long edge" column on the left and
@@ -589,6 +593,18 @@ class MipsPage(_Page):
         self.tree.tag_configure("even", background=app.c("inset"))
         self.tree.bind("<Button-1>", self._toggle_row)
 
+        # the script_rt footnote lives in the Report header, not under the buttons:
+        # that is what lets the button row and the bar sink to the bottom of the page
+        note = tk.Frame(self.report_card.head, bg=app.c("card"))
+        note.pack(side="right")
+        app.style_widget(note, "card")
+        hint = tk.Label(note, text="", bg=app.c("card"), fg=app.c("faint"), font=_font(8),
+                        anchor="e", justify="right")
+        hint.pack(side="left")
+        app.style_widget(hint, "card", "faint")
+        app.bind_text(hint, "mips.skip_note")
+        HelpDot(note, app, "help.script_rt").pack(side="left", padx=(6, 0))
+
         action = tk.Frame(self.report_card.body, bg=app.c("card"))
         action.pack(fill="x", pady=(8, 0))
         app.style_widget(action, "card")
@@ -598,23 +614,15 @@ class MipsPage(_Page):
         app._button(self.actions, app.t("mips.check"), self.check, primary=True).pack(side="left")
         self.fix_btn = app._button(self.actions, app.t("mips.fix"), self.fix, primary=True)
         self.fix_btn.pack(side="left", padx=(8, 0))
-        self.stop_btn = app._button(self.actions, app.t("cancel"), self.stop)
+        self.stop_btn = app._button(self.actions, app.t("cancel"), self.stop, kind="neutral")
         self.stop_btn.pack(side="left", padx=(8, 0))
         self.summary = tk.Label(action, text="", bg=app.c("card"), fg=app.c("dim"),
                                 font=_font(9), anchor="w")
         self.summary.pack(fill="x", pady=(6, 0))
 
-        note = tk.Frame(action, bg=app.c("card"))
-        note.pack(fill="x", pady=(2, 0))
-        app.style_widget(note, "card")
-        hint = tk.Label(note, text="", bg=app.c("card"), fg=app.c("faint"), font=_font(8))
-        hint.pack(side="left")
-        app.style_widget(hint, "card", "faint")
-        app.bind_text(hint, "mips.skip_note")
-        HelpDot(note, app, "help.script_rt").pack(side="left", padx=(6, 0))
         app.style_widget(self.summary, "card", "dim")
-        self.progress = tk.Frame(action, bg=app.c("track"), height=6)
-        self.progress.pack(fill="x", pady=(6, 0))
+        self.progress = tk.Frame(self.actions, bg=app.c("track"), height=6)
+        self.progress.pack(side="left", fill="x", expand=True, padx=(12, 0))
         self.bar = tk.Frame(self.progress, bg=app.c("accent"), height=6)
         self.bar.place(x=0, y=0, relwidth=0.0, relheight=1.0)
         self.state = tk.Label(action, text="", bg=app.c("card"), fg=app.c("faint"),
@@ -622,8 +630,8 @@ class MipsPage(_Page):
         self.state.pack(fill="x", pady=(4, 0))
         app.style_widget(self.state, "card", "faint")
 
-        app._button(self.btnrow, app.t("mips.add"), self._add_files, primary=True).pack(side="left")
-        app._button(self.btnrow, app.t("mips.add_dir"), self._add_folder).pack(side="left", padx=6)
+        app._button(self.btnrow, app.t("mips.add_dir"), self._add_folder, fixed=128).pack(side="right")
+        app._button(self.btnrow, app.t("mips.add"), self._add_files, primary=True, fixed=128).pack(side="right", padx=(0, 6))
 
     # -- files -----------------------------------------------------------
     def pick(self):
@@ -812,16 +820,7 @@ class MipsPage(_Page):
         if not picked:
             self.state.configure(text=self.app.t("mips.pick"))
             return
-        core = self.app.core_dir or ""
-        if not core:
-            from . import cw
-            core = cw.find_corewalker() or ""
-            if core:
-                self.app.core_dir = core
-                self.log("codewalker: %s" % core)
-        if not _core_ok(core):
-            self.state.configure(text=self.app.t("ytd.cw_missing"))
-            return
+        core = ""
         texconv = self.app.texconv
         files = list(picked.items())
 
@@ -900,30 +899,16 @@ class YtdPage(_Page):
         super().__init__(app, parent)
         self.meta = {}
 
-        cw_card = Card(self.right, app, "ytd.cw")
-        cw_card.pack(fill="x")
-        row = tk.Frame(cw_card.body, bg=app.c("card"))
-        row.pack(fill="x")
-        app.style_widget(row, "card")
-        self.cw_var = tk.StringVar(value=app.core_dir or "")
-        self.cw_entry = tk.Entry(row, textvariable=self.cw_var, bg=app.c("inset"), fg=app.c("fg"),
-                                 insertbackground=app.c("fg"), relief="flat", bd=0, width=30,
-                                 highlightthickness=1, highlightbackground=app.c("stroke"),
-                                 font=_font(8))
-        self.cw_entry.pack(side="left", fill="x", expand=True, ipady=4)
-        app.style_widget(self.cw_entry, "inset", "fg")
-        self.cw_state = tk.Label(row, text="", bg=app.c("card"), fg=app.c("faint"),
-                                 font=_font(8))
-        self.cw_state.pack(side="left", padx=8)
-        app.style_widget(self.cw_state, "card", "faint")
-        app._button(row, app.t("ytd.cw_browse"), self.browse_cw).pack(side="left")
-        app._button(row, app.t("ytd.cw_detect"), self.detect_cw).pack(side="left", padx=6)
         self.bad = tk.Label(self.right, text="", bg=app.c("bg"), fg=app.c("warning"),
                             font=_font(9), anchor="w")
         app.style_widget(self.bad, "bg", "warning")
 
         self.panel = ModePanel(self.right, app, self)
         self.panel.pack(fill="x", pady=(10, 0))
+
+        # CodeWalker is not used anywhere any more: compression, MIP repair, PED
+        # repair, audit and RPF defrag all run on the vendored fivefury + rpf7 code.
+        self.cw_var = tk.StringVar(value="")
 
         self.report_card = Card(self.right, app, "report")
         self.report_card.pack(fill="both", expand=True, pady=(10, 0))
@@ -941,12 +926,8 @@ class YtdPage(_Page):
                                 font=_font(9), anchor="w", justify="left")
         self.summary.pack(fill="x")
         app.style_widget(self.summary, "card", "dim")
-        self.progress = tk.Frame(action, bg=app.c("track"), height=6)
-        self.progress.pack(fill="x", pady=(6, 0))
-        self.bar = tk.Frame(self.progress, bg=app.c("accent"), height=6)
-        self.bar.place(x=0, y=0, relwidth=0.0, relheight=1.0)
         self.state = tk.Label(action, text="", bg=app.c("card"), fg=app.c("faint"),
-                              font=_font(8), anchor="w", justify="left")
+                              font=_font(8), anchor="e", justify="right")
         self.state.pack(fill="x", pady=(4, 0))
         app.style_widget(self.state, "card", "faint")
 
@@ -955,35 +936,23 @@ class YtdPage(_Page):
         app.style_widget(buttons, "card")
         app._button(buttons, app.t("ytd.plan"), self.plan).pack(side="left")
         app._button(buttons, app.t("ytd.start"), self.compress, primary=True).pack(side="left", padx=8)
-        self.stop_btn = app._button(buttons, app.t("cancel"), self.stop)
+        self.stop_btn = app._button(buttons, app.t("cancel"), self.stop, kind="neutral")
         self.stop_btn.pack(side="left")
+        self.progress = tk.Frame(buttons, bg=app.c("track"), height=6)
+        self.progress.pack(side="left", fill="x", expand=True, padx=(12, 0))
+        self.bar = tk.Frame(self.progress, bg=app.c("accent"), height=6)
+        self.bar.place(x=0, y=0, relwidth=0.0, relheight=1.0)
 
-        app._button(self.btnrow, app.t("ytd.add"), self._add_files, primary=True).pack(side="left")
-        app._button(self.btnrow, app.t("ytd.add_dir"), self._add_folder).pack(side="left", padx=6)
+
+        app._button(self.btnrow, app.t("ytd.add_dir"), self._add_folder, fixed=128).pack(side="right")
+        app._button(self.btnrow, app.t("ytd.add"), self._add_files, primary=True, fixed=128).pack(side="right", padx=(0, 6))
 
         self._sync_cw()
 
     # -- code walker -----------------------------------------------------
     def _sync_cw(self):
-        path = self.cw_var.get().strip()
-        self.app.core_dir = path
-        self.cw_state.configure(text=self.app.t("ytd.cw_ok") if path
-                                else self.app.t("ytd.cw_missing"))
-
-    def browse_cw(self):
-        path = filedialog.askdirectory(parent=self.app, title=self.app.t("ytd.cw"))
-        if path:
-            self.cw_var.set(path)
-            self._sync_cw()
-
-    def detect_cw(self):
-        found = cw.find_corewalker(None)
-        if found:
-            self.cw_var.set(found)
-            self._sync_cw()
-            self.log("codewalker: %s" % found)
-        else:
-            self.cw_state.configure(text=self.app.t("ytd.cw_missing"))
+        """Kept as a no-op: CodeWalker is no longer part of any code path."""
+        self.app.core_dir = ""
 
     # -- files -----------------------------------------------------------
     def pick(self):
@@ -1128,9 +1097,6 @@ class YtdPage(_Page):
             self.set_state(self.app.t("ytd.pick"))
             return
         mode, cap, core, texconv = self._params()
-        if not _core_ok(core):
-            self.state.configure(text=self.app.t("ytd.cw_missing"))
-            return
         files = list(self.files)
         self.write("")
         self.set_state(self.app.t("state.compressing"))
@@ -1182,6 +1148,7 @@ class YtdPage(_Page):
         if before:
             lines.append(self.app.t("ytd.file", before=before / 1048576.0, after=after / 1048576.0,
                                     pct=round((after - before) * 100.0 / before)))
+        lines.append(self.app.t("ytd.disk_note"))
         self.summary.configure(text="\n".join(lines))
         self.set_state("")
 
@@ -1248,6 +1215,7 @@ class PedPage(_Page):
         self.owner = self
         self.pairs = []
         self.status = []
+        self.picked = set()
         self.listbox.configure(font=_mono(9), selectmode="extended",
                                activestyle="none",
                                selectbackground=self.app.c("hover"),
@@ -1277,30 +1245,30 @@ class PedPage(_Page):
         self.actions.pack(fill="x")
         app.style_widget(self.actions, "card")
         self.btn_check = app._button(self.actions, app.t("ped.check"), self.check_all, primary=True)
-        self.stop_btn = app._button(self.actions, app.t("cancel"), self.stop)
+        self.stop_btn = app._button(self.actions, app.t("cancel"), self.stop, kind="neutral")
         self.btn_check.pack(side="left")
         app.bind_text(self.btn_check, "ped.check")
         self.btn_fix = app._button(self.actions, app.t("ped.fix"), self.fix_all)
         self.btn_fix.pack(side="left", padx=(8, 0))
         app.bind_text(self.btn_fix, "ped.fix")
+        self.progress = tk.Frame(self.actions, bg=app.c("track"), height=6)
+        self.progress.pack(side="left", fill="x", expand=True, padx=(12, 8))
+        self.bar = tk.Frame(self.progress, bg=app.c("accent"), height=6)
+        self.bar.place(x=0, y=0, relwidth=0.0, relheight=1.0)
         self.pick_label = tk.Label(self.actions, text="", bg=app.c("card"),
                                    fg=app.c("faint"), font=_font(8), anchor="e")
         self.pick_label.pack(side="right")
         app.style_widget(self.pick_label, "card", "faint")
         self.summary = tk.Label(action, text="", bg=app.c("card"), fg=app.c("dim"),
-                                font=_font(9), anchor="w")
+                                font=_font(9), anchor="e", justify="right")
         self.summary.pack(fill="x", pady=(6, 0))
         app.style_widget(self.summary, "card", "dim")
-        self.progress = tk.Frame(action, bg=app.c("track"), height=6)
-        self.progress.pack(fill="x", pady=(6, 0))
-        self.bar = tk.Frame(self.progress, bg=app.c("accent"), height=6)
-        self.bar.place(x=0, y=0, relwidth=0.0, relheight=1.0)
         self.state = tk.Label(action, text="", bg=app.c("card"), fg=app.c("faint"),
-                              font=_font(8), anchor="w", justify="left")
+                              font=_font(8), anchor="e", justify="right")
         self.state.pack(fill="x", pady=(4, 0))
         app.style_widget(self.state, "card", "faint")
 
-        app._button(self.btnrow, app.t("ped.add"), self._add_folder, primary=True).pack(side="left")
+        app._button(self.btnrow, app.t("ped.add"), self._add_folder, primary=True, fixed=128).pack(side="right")
         self.set_state(app.t("ped.pick"))
 
     # -- file handling ---------------------------------------------------
@@ -1406,7 +1374,7 @@ class PedPage(_Page):
         return "break"
 
     def _refresh_pick(self):
-        picked = len(self.picked)
+        picked = len(getattr(self, "picked", ()))
         try:
             self.pick_label.configure(text=self.app.t("ped.picked").format(n=picked))
             self.btn_fix.configure(state=("normal" if picked else "disabled"))
@@ -1428,8 +1396,7 @@ class PedPage(_Page):
             pass
 
     def _core(self):
-        folder = getattr(self.app, "core_dir", "") or ""
-        return folder if _core_ok(folder) else ""
+        return ""
 
     def _run(self, jobs, kind):
         owner = getattr(self.app, "busy_owner", None)
@@ -1470,20 +1437,34 @@ class PedPage(_Page):
                         else:
                             changes, _out = ped.fix_pair(stem, ydd, ymt, self._core())
                             label = "repaired"
-                        fixed += 1
-                        self._events.put(("mark", (index, "ok")))
-                        self._events.put(("report", "%s: %s (%s)" % (stem, label, ", ".join(changes[:3]) or "no change")))
+                        if changes:
+                            fixed += 1
+                            self._events.put(("mark", (index, "ok")))
+                            self._events.put(("report", "%s: %s (%s)" % (stem, label, ", ".join(changes[:3]))))
+                        else:
+                            bad += 1
+                            self._events.put(("mark", (index, "bad")))
+                            self._events.put(("report", "%s: nothing repairable was found" % stem))
                     elif kind == "align":
                         changes, _out = ped.align_pair(stem, ydd, ymt, self._core(), apply=True)
-                        fixed += 1
-                        self._events.put(("mark", (index, "ok")))
-                        self._events.put(("report", "%s: %s" % (stem, "; ".join(changes[:4]))))
+                        if changes:
+                            fixed += 1
+                            self._events.put(("mark", (index, "ok")))
+                            self._events.put(("report", "%s: %s" % (stem, "; ".join(changes[:4]))))
+                        else:
+                            bad += 1
+                            self._events.put(("mark", (index, "bad")))
+                            self._events.put(("report", "%s: nothing to align" % stem))
                     elif kind == "fix":
                         changes, _out = ped.fix_pair(stem, ydd, ymt, self._core())
-                        fixed += 1
-                        self._events.put(("mark", (index, "ok")))
                         if changes:
-                            self._events.put(("report", "%s: %d fix(es)" % (stem, changes)))
+                            fixed += 1
+                            self._events.put(("mark", (index, "ok")))
+                            self._events.put(("report", "%s: %s" % (stem, "; ".join(changes[:4]))))
+                        else:
+                            bad += 1
+                            self._events.put(("mark", (index, "bad")))
+                            self._events.put(("report", "%s: nothing repairable was found" % stem))
                     else:
                         report = ped.check_pair(stem, ydd, ymt, self._core())
                         if report.ok:
@@ -1514,9 +1495,6 @@ class PedPage(_Page):
         if not self.pairs:
             self.set_state(self.app.t("ped.pick"))
             return
-        if not self._core():
-            self.set_state(self.app.t("ytd.cw_missing"))
-            return
         jobs = [(i, stem, ydd, ymt) for i, (stem, ydd, ymt) in enumerate(self.pairs)]
         self._run(jobs, "check")
 
@@ -1525,9 +1503,6 @@ class PedPage(_Page):
             return
         if not self.pairs:
             self.set_state(self.app.t("ped.pick"))
-            return
-        if not self._core():
-            self.set_state(self.app.t("ytd.cw_missing"))
             return
         picked = set(self.picked)
         jobs = [(i, stem, ydd, ymt) for i, (stem, ydd, ymt) in enumerate(self.pairs)
@@ -1542,9 +1517,6 @@ class PedPage(_Page):
             return
         if not self.pairs:
             self.set_state(self.app.t("ped.pick"))
-            return
-        if not self._core():
-            self.set_state(self.app.t("ytd.cw_missing"))
             return
         jobs = [(i, stem, ydd, ymt) for i, (stem, ydd, ymt) in enumerate(self.pairs)
                 if self.status[i] in ("bad", None)]
@@ -1607,4 +1579,204 @@ class PedPage(_Page):
 
 def build_ped_page(app, parent):
     page = PedPage(app, parent)
+    return page
+
+
+class RpfPage(_Page):
+    """Defragment .rpf archives: give the space freed by compression back to disk.
+
+    This is the only page that needs CodeWalker, so the folder picker lives here
+    instead of on the compression page where it looked like a compression setting.
+    """
+
+    suffixes = (".rpf",)
+    file_title = "rpf.files"
+
+    def __init__(self, app, parent):
+        super().__init__(app, parent)
+        self.owner = self
+
+        # CodeWalker is not used any more: the defrag runs on the pure-Python RPF7
+        # writer, so there is no folder to pick and no build to detect.
+        self.cw_var = tk.StringVar(value="")
+
+        self.report_card = Card(self.right, app, "report")
+        self.report_card.pack(fill="both", expand=True, pady=(10, 0))
+        self.text = tk.Text(self.report_card.body, bg=app.c("inset"), fg=app.c("dim"),
+                            insertbackground=app.c("fg"), relief="flat", bd=0,
+                            highlightthickness=1, highlightbackground=app.c("stroke"),
+                            font=_mono(8), wrap="word", width=1, height=8)
+        self.text.pack(fill="both", expand=True)
+        app.style_widget(self.text, "inset", "dim")
+        for name, color, font in (("title", "fg", _mono(9)), ("dim", "dim", None),
+                                  ("ok", "green", None), ("warn", "warning", None),
+                                  ("err", "danger", None), ("bak", "faint", None)):
+            self._tag(name, color, font)
+
+        action = tk.Frame(self.report_card.body, bg=app.c("card"))
+        action.pack(fill="x", pady=(8, 0))
+        app.style_widget(action, "card")
+        self.summary = tk.Label(action, text="", bg=app.c("card"), fg=app.c("dim"),
+                                font=_font(9), anchor="e", justify="right")
+        self.summary.pack(fill="x")
+        app.style_widget(self.summary, "card", "dim")
+        self.state = tk.Label(action, text="", bg=app.c("card"), fg=app.c("faint"),
+                              font=_font(8), anchor="e", justify="right", wraplength=560)
+        self.state.pack(fill="x", pady=(4, 0))
+        app.style_widget(self.state, "card", "faint")
+
+        buttons = tk.Frame(action, bg=app.c("card"))
+        buttons.pack(fill="x", pady=(8, 0), before=self.summary)
+        app.style_widget(buttons, "card")
+        self.repack_btn = app._button(buttons, app.t("rpf.start"), self.repack, primary=True)
+        self.repack_btn.pack(side="left")
+        self.stop_btn = app._button(buttons, app.t("cancel"), self.stop_work, kind="neutral")
+        self.stop_btn.pack(side="left", padx=8)
+        self.progress = tk.Frame(buttons, bg=app.c("track"), height=6)
+        self.progress.pack(side="left", fill="x", expand=True, padx=(12, 0))
+        self.bar = tk.Frame(self.progress, bg=app.c("accent"), height=6)
+        self.bar.place(x=0, y=0, relwidth=0.0, relheight=1.0)
+
+        self.add_dir_btn = app._button(self.btnrow, app.t("rpf.add_dir"), self._add_folder, fixed=128)
+        self.add_dir_btn.pack(side="right")
+        self.add_btn = app._button(self.btnrow, app.t("rpf.add"), self._add_files, primary=True, fixed=128)
+        self.add_btn.pack(side="right", padx=(0, 6))
+
+        self._set_busy(False)
+
+    # -- files -----------------------------------------------------------
+    def pick(self):
+        return _pick_files(self.app, self.app.t("rpf.add"),
+                           [("archives", "*.rpf"), ("all", "*.*")])
+
+    def pick_dir(self):
+        return _walk(_pick_dir(self.app, self.app.t("rpf.add_dir")), self.suffixes)
+
+    def _after_add(self):
+        self.listbox.delete(0, "end")
+        for path in self.files:
+            self.listbox.insert("end", "%s  %s" % (os.path.basename(path), _human(_size_of(path))))
+
+    def write(self, text):
+        self.text.configure(state="normal")
+        self.text.delete("1.0", "end")
+        if text:
+            self.text.insert("end", text)
+        self.text.configure(state="disabled")
+
+    def write_line(self, text, tag=None):
+        self.text.configure(state="normal")
+        if tag:
+            self.text.insert("end", text + "\n", tag)
+        else:
+            self.text.insert("end", text + "\n")
+        self.text.see("end")
+        self.text.configure(state="disabled")
+
+    def _tag(self, name, color, font=None):
+        options = {"foreground": self.app.c(color)}
+        if font is not None:
+            options["font"] = font
+        self.text.tag_configure(name, **options)
+
+    # -- repack ----------------------------------------------------------
+    def _set_busy(self, busy):
+        state = "disabled" if busy else "normal"
+        for widget in (self.btn_clear, self.btn_remove, self.add_btn, self.add_dir_btn,
+                       self.listbox):
+            try:
+                widget.configure(state=state)
+            except Exception:                              # noqa: BLE001
+                pass
+        self.stop_btn.configure(state="normal" if busy else "disabled")
+        self.repack_btn.configure(state="disabled" if busy else "normal")
+        self.bar.place_configure(relwidth=0.0)
+
+    def repack(self):
+        paths = list(self.files)
+        if not paths:
+            self.set_state(self.app.t("rpf.need_files"))
+            return
+        if getattr(self, "_running", False):
+            return
+        self._running = True
+        self._stop = False
+        self._cancel = threading.Event()
+        self.write("")
+        self.summary.configure(text="")
+        self.state.configure(text="starting...")
+        self._set_busy(True)
+        threading.Thread(target=self._work, args=(paths, ""), daemon=True).start()
+
+    def stop_work(self):
+        if getattr(self, "_running", False):
+            self._stop = True
+            self._cancel.set()
+            self.state.configure(text="stopping: killing the worker process...")
+
+    def _post(self, text, tag=None):
+        self.app.after(0, lambda t=text, g=tag: self.write_line(t, g))
+
+    def _write_report(self, report, kept):
+        """Lay one archive out as a block: what is inside, the backup, then the win."""
+        if not isinstance(report, rpf.Report):
+            self._post("ok   " + str(report), "ok")
+            return
+        self._post(report.leaf, "title")
+        counts = "%d entr%s" % (report.entries, "y" if report.entries == 1 else "ies")
+        if report.children:
+            counts += ", %d nested archive%s" % (report.children,
+                                                 "" if report.children == 1 else "s")
+        if report.recursive:
+            counts += ", recursed"
+        self._post("    " + counts, "dim")
+        if kept:
+            self._post("    backup    " + kept, "bak")
+        before = format(report.before, ",")
+        after = format(report.after, ",")
+        if report.saved:
+            self._post("    %s -> %s bytes    -%.1f%%    %d ms"
+                       % (before, after, report.pct, report.ms), "ok")
+        else:
+            self._post("    %s bytes    nothing to reclaim    %d ms"
+                       % (before, report.ms), "dim")
+
+    def _tick(self, index, total, name):
+        self.state.configure(text="working  %d/%d  %s" % (index, total, name))
+        self.bar.place_configure(relwidth=min(1.0, (index - 1) / float(max(1, total))))
+
+    def _work(self, paths, core):
+        total = len(paths)
+        done = 0
+        for index, path in enumerate(paths, 1):
+            name = os.path.basename(path)
+            if self._stop:
+                self._post("stop  stopped before %s" % name)
+                break
+            self.app.after(0, lambda i=index, t=total, n=name: self._tick(i, t, n))
+            kept = rpf.backup(path)
+            if not kept:
+                if os.path.getsize(path) > rpf.BACKUP_LIMIT:
+                    self._post("    no backup: larger than 500 MB, copy it yourself first", "warn")
+                elif not settings.keep_bak():
+                    self._post("    no backup: 'Keep .bak files' is switched off", "warn")
+
+            try:
+                msg = rpf.defrag(path, recursive=True)
+            except Exception as exc:                          # noqa: BLE001
+                self._post(name, "title")
+                self._post("    failed: %s" % str(exc)[:300], "err")
+                continue
+            done += 1
+            self._write_report(msg, kept)
+        self._running = False
+        self.app.after(0, lambda: self.summary.configure(
+            text="%d/%d archive(s) compacted" % (done, total)))
+        self.app.after(0, lambda: self.bar.place_configure(relwidth=1.0))
+        self.app.after(0, lambda: self.state.configure(text=""))
+        self.app.after(0, lambda: self._set_busy(False))
+
+
+def build_rpf_page(app, parent):
+    page = RpfPage(app, parent)
     return page

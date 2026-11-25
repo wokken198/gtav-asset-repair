@@ -1,0 +1,229 @@
+from __future__ import annotations
+
+import io
+import os
+import zipfile
+from collections.abc import Iterator
+from pathlib import Path
+from typing import TYPE_CHECKING, BinaryIO
+
+from .utils import _normalize_path
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .archive import RpfArchive
+    from .modes import RpfEncryption, RpfExportMode, RpfExtractionConflict, RpfPlatform
+
+
+def _ensure_container_path(
+    current: RpfArchive, parts: list[str]
+) -> tuple[RpfArchive, str]:
+    archive = current
+    relative_path = ""
+    for segment in parts:
+        if segment.lower().endswith(".rpf"):
+            full = f"{relative_path}/{segment}" if relative_path else segment
+            _, archive = archive.nested_archive(full)
+            relative_path = ""
+            continue
+        relative_path = f"{relative_path}/{segment}" if relative_path else segment
+        archive.directory(relative_path)
+    return archive, relative_path
+
+
+def _insert_file_path(
+    current: RpfArchive,
+    parts: list[str],
+    data: bytes,
+) -> None:
+    if not parts:
+        return
+    archive, relative_path = _ensure_container_path(current, parts[:-1])
+    leaf = parts[-1]
+    full = f"{relative_path}/{leaf}" if relative_path else leaf
+    archive.file(full, data)
+
+
+def _insert_source_path(
+    current: RpfArchive,
+    parts: list[str],
+    source_path: Path,
+) -> None:
+    if not parts:
+        return
+    archive, relative_path = _ensure_container_path(current, parts[:-1])
+    leaf = parts[-1]
+    full = f"{relative_path}/{leaf}" if relative_path else leaf
+    from .sources import _detect_file_source
+
+    if source_path.suffix.lower() in (".ymap", ".ytyp"):
+        archive.file(full, source_path.read_bytes())
+    else:
+        archive.file_path(full, _detect_file_source(source_path))
+
+
+def _ensure_directory_path(current: RpfArchive, parts: list[str]) -> None:
+    _ensure_container_path(current, parts)
+
+
+def _iter_directory_paths(root: Path) -> Iterator[Path]:
+    for current_dir, directory_names, file_names in os.walk(root):
+        directory_names[:] = sorted(
+            (name for name in directory_names if not name.startswith(".")),
+            key=str.lower,
+        )
+        current = Path(current_dir)
+        for name in directory_names:
+            yield current / name
+        for name in sorted(file_names, key=str.lower):
+            yield current / name
+
+
+def _zip_to_rpf(zf: zipfile.ZipFile, *, name: str) -> RpfArchive:
+    from .archive import RpfArchive
+
+    archive = RpfArchive.empty(name)
+    for info in sorted(zf.infolist(), key=lambda i: i.filename.lower()):
+        path = _normalize_path(info.filename)
+        if not path:
+            continue
+        parts = path.split("/")
+        if info.is_dir():
+            _ensure_directory_path(archive, parts)
+            continue
+        _insert_file_path(archive, parts, zf.read(info.filename))
+    return archive
+
+
+def _directory_to_rpf(source_dir: str | Path, *, name: str) -> RpfArchive:
+    from .archive import RpfArchive
+
+    root = Path(source_dir).resolve(strict=True)
+    if not root.is_dir():
+        raise NotADirectoryError(root)
+    archive = RpfArchive.empty(name or root.name)
+    for path in _iter_directory_paths(root):
+        rel = path.relative_to(root).as_posix()
+        parts = rel.split("/")
+        if path.is_dir():
+            _ensure_directory_path(archive, parts)
+            continue
+        _insert_source_path(archive, parts, path)
+    return archive
+
+
+def _coerce_archive(
+    source: str | Path | bytes | BinaryIO | RpfArchive,
+) -> RpfArchive:
+    from .archive import RpfArchive
+
+    if isinstance(source, RpfArchive):
+        return source
+    if isinstance(source, (str, Path)):
+        return RpfArchive.from_path(source)
+    if isinstance(source, (bytes, bytearray)):
+        return RpfArchive.from_bytes(bytes(source))
+    return RpfArchive.from_bytes(source.read())
+
+
+def load_rpf(source: str | Path | bytes | BinaryIO) -> RpfArchive:
+    return _coerce_archive(source)
+
+
+def create_rpf(
+    name: str = "archive.rpf",
+    *,
+    encryption: RpfEncryption | None = None,
+    platform: RpfPlatform | None = None,
+) -> RpfArchive:
+    from .archive import RpfArchive
+    from .modes import RpfEncryption, RpfPlatform
+
+    return RpfArchive.empty(
+        name,
+        encryption=encryption or RpfEncryption.OPEN,
+        platform=platform or RpfPlatform.PC,
+    )
+
+
+def rpf_to_zip(
+    rpf_source: str | Path | bytes | BinaryIO | RpfArchive,
+    output: str | Path | None = None,
+    *,
+    mode: RpfExportMode | None = None,
+    recurse_nested: bool = True,
+) -> bytes:
+    from .archive import RpfArchive
+    from .modes import RpfExportMode
+
+    archive = _coerce_archive(rpf_source)
+    try:
+        return archive.to_zip(
+            output, mode=mode or RpfExportMode.STANDALONE, recurse_nested=recurse_nested
+        )
+    finally:
+        if not isinstance(rpf_source, RpfArchive):
+            archive.close()
+
+
+def rpf_to_folder(
+    rpf_source: str | Path | bytes | BinaryIO | RpfArchive,
+    output_dir: str | Path,
+    *,
+    mode: RpfExportMode | None = None,
+    recurse_nested: bool = True,
+    conflict: RpfExtractionConflict | None = None,
+) -> list[Path]:
+    from .archive import RpfArchive
+    from .modes import RpfExportMode, RpfExtractionConflict
+
+    archive = _coerce_archive(rpf_source)
+    try:
+        return archive.to_folder(
+            output_dir,
+            mode=mode or RpfExportMode.STANDALONE,
+            recurse_nested=recurse_nested,
+            conflict=conflict or RpfExtractionConflict.SUFFIX,
+        )
+    finally:
+        if not isinstance(rpf_source, RpfArchive):
+            archive.close()
+
+
+def zip_to_rpf(
+    zip_source: str | Path | bytes | BinaryIO,
+    output: str | Path | None = None,
+    *,
+    name: str = "archive",
+) -> RpfArchive | bytes:
+    if isinstance(zip_source, (str, Path)):
+        path = Path(zip_source)
+        if path.is_dir():
+            archive = _directory_to_rpf(path, name=name or path.name)
+        else:
+            with zipfile.ZipFile(path, "r") as zf:
+                archive = _zip_to_rpf(zf, name=name)
+    elif isinstance(zip_source, (bytes, bytearray)):
+        with zipfile.ZipFile(io.BytesIO(zip_source), "r") as zf:
+            archive = _zip_to_rpf(zf, name=name)
+    else:
+        with zipfile.ZipFile(io.BytesIO(zip_source.read()), "r") as zf:
+            archive = _zip_to_rpf(zf, name=name)
+    if output is not None:
+        archive.save(output)
+        return Path(output).read_bytes()
+    return archive
+
+
+__all__ = [
+    "_coerce_archive",
+    "_directory_to_rpf",
+    "_ensure_container_path",
+    "_ensure_directory_path",
+    "_insert_file_path",
+    "_zip_to_rpf",
+    "create_rpf",
+    "load_rpf",
+    "rpf_to_folder",
+    "rpf_to_zip",
+    "zip_to_rpf",
+]

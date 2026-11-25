@@ -1,0 +1,689 @@
+from __future__ import annotations
+
+import dataclasses
+from collections.abc import Hashable, Iterable
+from enum import IntFlag
+from pathlib import Path
+
+from ..authoring.context import BuildContext
+from ..authoring.diagnostics import ValidationReport
+from ..common import FlexibleIntEnum
+from ..game_target import GameTarget, coerce_game_target
+from ..resource import ResourcePagesInfo
+from ..vector import Vector2, Vector3
+from .regions import position_matches_ynd_area
+
+
+class YndNodeSpeed(FlexibleIntEnum):
+    SLOW = 0
+    NORMAL = 1
+    FAST = 2
+    FASTER = 3
+
+
+class YndNodeSpecialType(FlexibleIntEnum):
+    NONE = 0
+    PARKING_PARALLEL = 1
+    PARKING_PERPENDICULAR = 2
+    DROPOFF_GOODS = 3
+    DRIVE_THROUGH = 4
+    DRIVE_THROUGH_WINDOW = 5
+    DROPOFF_GOODS_UNLOAD = 6
+    HIDING_NODE = 7
+    SMALL_WORK_VEHICLES = 8
+    PETROL_STATION = 9
+    PED_CROSSING = 10
+    DROPOFF_PASSENGERS = 11
+    DROPOFF_PASSENGERS_UNLOAD = 12
+    OPEN_SPACE = 13
+    PED_ASSISTED_MOVEMENT = 14
+    TRAFFIC_LIGHT = 15
+    GIVE_WAY = 16
+    FORCE_JUNCTION = 17
+    PED_DRIVEWAY_CROSSING = 18
+    RESTRICTED_AREA = 19
+    FALSE_JUNCTION = 20
+    DISABLE_VEHICLE_CREATION = 21
+
+
+class YndNodeMovementFlags(IntFlag):
+    NONE = 0
+    OFFROAD = 1 << 3
+    ON_PLAYERS_ROAD = 1 << 4
+    NO_BIG_VEHICLES = 1 << 5
+    CANNOT_GO_RIGHT = 1 << 6
+    CANNOT_GO_LEFT = 1 << 7
+
+
+class YndNodeGuidanceFlags(IntFlag):
+    NONE = 0
+    SLIP_LANE = 1 << 0
+    INDICATE_KEEP_LEFT = 1 << 1
+    INDICATE_KEEP_RIGHT = 1 << 2
+
+
+class YndNodeStateFlags(IntFlag):
+    NONE = 0
+    NO_GPS = 1 << 0
+    CLOSE_TO_CAMERA = 1 << 1
+    SLIP_JUNCTION = 1 << 2
+    ALREADY_FOUND = 1 << 3
+    SWITCHED_OFF_ORIGINAL = 1 << 4
+    WATER_NODE = 1 << 5
+    HIGHWAY_OR_LOW_BRIDGE = 1 << 6
+    SWITCHED_OFF = 1 << 7
+
+
+class YndNodeRoutingFlags(IntFlag):
+    NONE = 0
+    IN_TUNNEL = 1 << 0
+
+
+class YndNodeTopographyFlags(IntFlag):
+    NONE = 0
+    LEFT_ONLY = 1 << 7
+
+
+class YndLinkTravelFlags(IntFlag):
+    NONE = 0
+    GPS_CAN_GO_BOTH_WAYS = 1 << 0
+    BLOCK_IF_NO_LANES = 1 << 1
+
+
+class YndLinkShapeFlags(IntFlag):
+    NONE = 0
+    NARROW_ROAD = 1 << 1
+    LEADS_TO_DEAD_END = 1 << 2
+    LEADS_FROM_DEAD_END = 1 << 3
+
+
+class YndLinkNavigationFlags(IntFlag):
+    NONE = 0
+    DONT_USE_FOR_NAVIGATION = 1 << 0
+    SHORTCUT = 1 << 1
+
+
+YndResourcePagesInfo = ResourcePagesInfo
+
+
+@dataclasses.dataclass(slots=True)
+class YndLink:
+    area_id: int | None = None
+    node_id: int = 0
+    target_key: Hashable | None = None
+    travel_flags: YndLinkTravelFlags = YndLinkTravelFlags.NONE
+    shape_flags: YndLinkShapeFlags = YndLinkShapeFlags.NONE
+    navigation_flags: YndLinkNavigationFlags = YndLinkNavigationFlags.NONE
+    tilt: int = 0
+    tilt_falloff: int = 0
+    width: int = 0
+    lanes_from_other_node: int = 0
+    lanes_to_other_node: int = 0
+    distance: int = 0
+
+    @classmethod
+    def from_packed(
+        cls,
+        *,
+        area_id: int,
+        node_id: int,
+        flags0: int,
+        flags1: int,
+        flags2: int,
+        link_length: int,
+    ) -> YndLink:
+        flags0 = int(flags0) & 0xFF
+        flags1 = int(flags1) & 0xFF
+        flags2 = int(flags2) & 0xFF
+        return cls(
+            area_id=int(area_id) & 0xFFFF,
+            node_id=int(node_id) & 0xFFFF,
+            travel_flags=YndLinkTravelFlags(flags0 & 0x03),
+            shape_flags=YndLinkShapeFlags(flags1 & 0x1E),
+            navigation_flags=YndLinkNavigationFlags(flags2 & 0x03),
+            tilt=(flags0 >> 2) & 0x1F,
+            tilt_falloff=((flags0 >> 7) & 0x1) | ((flags1 & 0x1) << 1),
+            width=(flags1 >> 4) & 0x0F,
+            lanes_from_other_node=(flags2 >> 2) & 0x07,
+            lanes_to_other_node=(flags2 >> 5) & 0x07,
+            distance=int(link_length) & 0xFF,
+        )
+
+    @property
+    def flags0(self) -> int:
+        return (
+            int(self.travel_flags)
+            | ((int(self.tilt) & 0x1F) << 2)
+            | ((int(self.tilt_falloff) & 0x1) << 7)
+        ) & 0xFF
+
+    @property
+    def flags1(self) -> int:
+        return (
+            ((int(self.tilt_falloff) >> 1) & 0x1)
+            | int(self.shape_flags)
+            | ((int(self.width) & 0x0F) << 4)
+        ) & 0xFF
+
+    @property
+    def flags2(self) -> int:
+        return (
+            int(self.navigation_flags)
+            | ((int(self.lanes_from_other_node) & 0x07) << 2)
+            | ((int(self.lanes_to_other_node) & 0x07) << 5)
+        ) & 0xFF
+
+    @property
+    def link_length(self) -> int:
+        return int(self.distance) & 0xFF
+
+    @link_length.setter
+    def link_length(self, value: int) -> None:
+        self.distance = int(value) & 0xFF
+
+    def build(self) -> YndLink:
+        self.area_id = None if self.area_id is None else (int(self.area_id) & 0xFFFF)
+        self.node_id = int(self.node_id) & 0xFFFF
+        if self.target_key is not None and not isinstance(self.target_key, Hashable):
+            raise TypeError("YND link target_key must be hashable")
+        self.travel_flags = YndLinkTravelFlags(int(self.travel_flags) & 0x03)
+        self.shape_flags = YndLinkShapeFlags(int(self.shape_flags) & 0x1E)
+        self.navigation_flags = YndLinkNavigationFlags(int(self.navigation_flags) & 0x03)
+        self.tilt = int(self.tilt) & 0x1F
+        self.tilt_falloff = int(self.tilt_falloff) & 0x03
+        self.width = int(self.width) & 0x0F
+        self.lanes_from_other_node = int(self.lanes_from_other_node) & 0x07
+        self.lanes_to_other_node = int(self.lanes_to_other_node) & 0x07
+        self.distance = int(self.distance) & 0xFF
+        return self
+
+
+@dataclasses.dataclass(slots=True)
+class YndJunction:
+    position: Vector2 = Vector2()
+    min_z: float = 0.0
+    max_z: float = 0.0
+    heightmap_dim_x: int = 0
+    heightmap_dim_y: int = 0
+    heightmap: bytes = b""
+    junction_ref_unk0: int = 0
+
+    @property
+    def heightmap_count(self) -> int:
+        return len(self.heightmap)
+
+    @property
+    def height_values(self) -> list[float]:
+        from .heightmaps import decode_junction_heightmap
+
+        return decode_junction_heightmap(self.heightmap, self.min_z, self.max_z)
+
+    def set_height_values(
+        self,
+        values: Iterable[float],
+        *,
+        dim_x: int,
+        dim_y: int,
+        min_z: float | None = None,
+        max_z: float | None = None,
+    ) -> YndJunction:
+        from .heightmaps import encode_junction_heightmap, quantize_junction_z
+
+        dim_x = int(dim_x)
+        dim_y = int(dim_y)
+        if dim_x <= 0 or dim_x > 255 or dim_y <= 0 or dim_y > 255:
+            raise ValueError("junction heightmap dimensions must be in the 1..255 range")
+        heights = [float(value) for value in values]
+        if len(heights) != dim_x * dim_y:
+            raise ValueError("junction height values count does not match dim_x * dim_y")
+        self.min_z = quantize_junction_z(min(heights) if min_z is None and heights else float(min_z or 0.0))
+        self.max_z = quantize_junction_z(max(heights) if max_z is None and heights else float(max_z or 0.0))
+        self.heightmap_dim_x = dim_x
+        self.heightmap_dim_y = dim_y
+        self.heightmap = encode_junction_heightmap(heights, self.min_z, self.max_z)
+        return self
+
+    def generate_heightmap(
+        self,
+        *,
+        samples: Iterable[Vector3] = (),
+        triangles: Iterable[tuple[Vector3, Vector3, Vector3]] = (),
+        dim_x: int = 16,
+        dim_y: int = 16,
+        bounds: tuple[Vector2, Vector2] | None = None,
+        center: Vector2 | None = None,
+        size: Vector2 | float | None = None,
+        min_z: float | None = None,
+        max_z: float | None = None,
+        fallback_z: float = 0.0,
+        grid_spacing: float = 2.0,
+    ) -> YndJunction:
+        from .heightmaps import build_junction_heightmap
+
+        heightmap = build_junction_heightmap(
+            samples=samples,
+            triangles=triangles,
+            dim_x=dim_x,
+            dim_y=dim_y,
+            bounds=bounds,
+            center=center or self.position,
+            size=size,
+            min_z=min_z,
+            max_z=max_z,
+            fallback_z=fallback_z,
+            grid_spacing=grid_spacing,
+        )
+        self.position = heightmap.position
+        self.min_z = heightmap.min_z
+        self.max_z = heightmap.max_z
+        self.heightmap_dim_x = heightmap.dim_x
+        self.heightmap_dim_y = heightmap.dim_y
+        self.heightmap = heightmap.data
+        return self
+
+    def build(self) -> YndJunction:
+        if not isinstance(self.position, Vector2):
+            raise TypeError("YND junction position must be a Vector2")
+        self.min_z = float(self.min_z)
+        self.max_z = float(self.max_z)
+        self.heightmap_dim_x = int(self.heightmap_dim_x) & 0xFF
+        self.heightmap_dim_y = int(self.heightmap_dim_y) & 0xFF
+        self.heightmap = bytes(self.heightmap)
+        self.junction_ref_unk0 = int(self.junction_ref_unk0) & 0xFFFF
+        expected = self.heightmap_dim_x * self.heightmap_dim_y
+        if expected != len(self.heightmap):
+            raise ValueError("junction heightmap byte count does not match heightmap_dim_x * heightmap_dim_y")
+        return self
+
+
+@dataclasses.dataclass(slots=True)
+class YndNode:
+    area_id: int | None = None
+    node_id: int = 0
+    key: Hashable | None = None
+    position: Vector3 = Vector3()
+    street_name_hash: int = 0
+    group: int = 0
+    movement_flags: YndNodeMovementFlags = YndNodeMovementFlags.NONE
+    guidance_flags: YndNodeGuidanceFlags = YndNodeGuidanceFlags.NONE
+    state_flags: YndNodeStateFlags = YndNodeStateFlags.NONE
+    routing_flags: YndNodeRoutingFlags = YndNodeRoutingFlags.NONE
+    topography_flags: YndNodeTopographyFlags = YndNodeTopographyFlags.NONE
+    special: YndNodeSpecialType = YndNodeSpecialType.NONE
+    speed: YndNodeSpeed = YndNodeSpeed.SLOW
+    qualifies_as_junction: bool = False
+    distance_hash: int = 0
+    density: int = 0
+    dead_endness: int = 0
+    links: list[YndLink] = dataclasses.field(default_factory=list)
+    junction: YndJunction | None = None
+    unused0: int = 0
+    unused1: int = 0
+    unused2: int = 0
+    unused3: int = 0
+    unused4: int = 0
+
+    @classmethod
+    def from_packed(
+        cls,
+        *,
+        area_id: int,
+        node_id: int,
+        position: Vector3,
+        street_name_hash: int,
+        flags0: int,
+        flags1: int,
+        flags2: int,
+        link_count_flags: int,
+        flags3: int,
+        flags4: int,
+        links: list[YndLink] | None = None,
+        junction: YndJunction | None = None,
+        unused0: int = 0,
+        unused1: int = 0,
+        unused2: int = 0,
+        unused3: int = 0,
+        unused4: int = 0,
+    ) -> YndNode:
+        flags0 = int(flags0) & 0xFF
+        flags1 = int(flags1) & 0xFF
+        flags2 = int(flags2) & 0xFF
+        link_count_flags = int(link_count_flags) & 0xFF
+        flags3 = int(flags3) & 0xFF
+        flags4 = int(flags4) & 0xFF
+        return cls(
+            area_id=int(area_id) & 0xFFFF,
+            node_id=int(node_id) & 0xFFFF,
+            position=position,
+            street_name_hash=int(street_name_hash) & 0xFFFFFFFF,
+            group=flags0 & 0x07,
+            movement_flags=YndNodeMovementFlags(flags0 & 0xF8),
+            guidance_flags=YndNodeGuidanceFlags(flags1 & 0x07),
+            state_flags=YndNodeStateFlags(flags2),
+            routing_flags=YndNodeRoutingFlags(flags3 & 0x01),
+            topography_flags=YndNodeTopographyFlags(flags4 & 0x80),
+            special=YndNodeSpecialType((flags1 >> 3) & 0x1F),
+            speed=YndNodeSpeed((link_count_flags >> 1) & 0x03),
+            qualifies_as_junction=bool(link_count_flags & 0x01),
+            distance_hash=(flags3 >> 1) & 0x7F,
+            density=flags4 & 0x0F,
+            dead_endness=(flags4 >> 4) & 0x07,
+            links=list(links or []),
+            junction=junction,
+            unused0=int(unused0) & 0xFFFFFFFF,
+            unused1=int(unused1) & 0xFFFFFFFF,
+            unused2=int(unused2) & 0xFFFFFFFF,
+            unused3=int(unused3) & 0xFFFFFFFF,
+            unused4=int(unused4) & 0xFFFF,
+        )
+
+    @property
+    def link_count(self) -> int:
+        return len(self.links)
+
+    @property
+    def is_ped_node(self) -> bool:
+        return self.special in {
+            YndNodeSpecialType.PED_CROSSING,
+            YndNodeSpecialType.PED_ASSISTED_MOVEMENT,
+            YndNodeSpecialType.PED_DRIVEWAY_CROSSING,
+        }
+
+    @property
+    def flags0(self) -> int:
+        return (int(self.group) & 0x07) | int(self.movement_flags)
+
+    @property
+    def flags1(self) -> int:
+        return (int(self.guidance_flags) & 0x07) | ((int(self.special) & 0x1F) << 3)
+
+    @property
+    def flags2(self) -> int:
+        return int(self.state_flags) & 0xFF
+
+    @property
+    def link_count_flags(self) -> int:
+        return (
+            (0x01 if self.qualifies_as_junction else 0x00)
+            | ((int(self.speed) & 0x03) << 1)
+            | ((len(self.links) & 0x1F) << 3)
+        ) & 0xFF
+
+    @property
+    def flags3(self) -> int:
+        return (int(self.routing_flags) & 0x01) | ((int(self.distance_hash) & 0x7F) << 1)
+
+    @property
+    def flags4(self) -> int:
+        return (
+            (int(self.density) & 0x0F)
+            | ((int(self.dead_endness) & 0x07) << 4)
+            | int(self.topography_flags)
+        ) & 0xFF
+
+    @property
+    def left_only(self) -> bool:
+        return bool(self.topography_flags & YndNodeTopographyFlags.LEFT_ONLY)
+
+    @left_only.setter
+    def left_only(self, value: bool) -> None:
+        if value:
+            self.topography_flags |= YndNodeTopographyFlags.LEFT_ONLY
+        else:
+            self.topography_flags &= ~YndNodeTopographyFlags.LEFT_ONLY
+
+    @property
+    def in_tunnel(self) -> bool:
+        return bool(self.routing_flags & YndNodeRoutingFlags.IN_TUNNEL)
+
+    @in_tunnel.setter
+    def in_tunnel(self, value: bool) -> None:
+        if value:
+            self.routing_flags |= YndNodeRoutingFlags.IN_TUNNEL
+        else:
+            self.routing_flags &= ~YndNodeRoutingFlags.IN_TUNNEL
+
+    def ensure_junction_heightmap(
+        self,
+        *,
+        samples: Iterable[Vector3] = (),
+        triangles: Iterable[tuple[Vector3, Vector3, Vector3]] = (),
+        dim_x: int = 16,
+        dim_y: int = 16,
+        bounds: tuple[Vector2, Vector2] | None = None,
+        center: Vector2 | None = None,
+        size: Vector2 | float | None = None,
+        min_z: float | None = None,
+        max_z: float | None = None,
+        fallback_z: float = 0.0,
+        grid_spacing: float = 2.0,
+    ) -> YndJunction:
+        if self.junction is None:
+            self.junction = YndJunction(position=Vector2(self.position.x, self.position.y))
+        self.junction.generate_heightmap(
+            samples=samples,
+            triangles=triangles,
+            dim_x=dim_x,
+            dim_y=dim_y,
+            bounds=bounds,
+            center=center or Vector2(self.position.x, self.position.y),
+            size=size,
+            min_z=min_z,
+            max_z=max_z,
+            fallback_z=fallback_z,
+            grid_spacing=grid_spacing,
+        )
+        self.qualifies_as_junction = True
+        return self.junction
+
+    def build(self) -> YndNode:
+        self.area_id = None if self.area_id is None else (int(self.area_id) & 0xFFFF)
+        self.node_id = int(self.node_id) & 0xFFFF
+        if self.key is not None and not isinstance(self.key, Hashable):
+            raise TypeError("YND node key must be hashable")
+        if not isinstance(self.position, Vector3):
+            raise TypeError("YND node position must be a Vector3")
+        self.street_name_hash = int(self.street_name_hash) & 0xFFFFFFFF
+        self.group = int(self.group) & 0x07
+        self.movement_flags = YndNodeMovementFlags(int(self.movement_flags) & 0xF8)
+        self.guidance_flags = YndNodeGuidanceFlags(int(self.guidance_flags) & 0x07)
+        self.state_flags = YndNodeStateFlags(int(self.state_flags) & 0xFF)
+        self.routing_flags = YndNodeRoutingFlags(int(self.routing_flags) & 0x01)
+        self.topography_flags = YndNodeTopographyFlags(int(self.topography_flags) & 0x80)
+        self.special = YndNodeSpecialType(int(self.special) & 0x1F)
+        self.speed = YndNodeSpeed(int(self.speed) & 0x03)
+        self.qualifies_as_junction = bool(self.qualifies_as_junction)
+        self.distance_hash = int(self.distance_hash) & 0x7F
+        self.density = int(self.density) & 0x0F
+        self.dead_endness = int(self.dead_endness) & 0x07
+        self.unused0 = int(self.unused0) & 0xFFFFFFFF
+        self.unused1 = int(self.unused1) & 0xFFFFFFFF
+        self.unused2 = int(self.unused2) & 0xFFFFFFFF
+        self.unused3 = int(self.unused3) & 0xFFFFFFFF
+        self.unused4 = int(self.unused4) & 0xFFFF
+        self.links = [link.build() for link in self.links]
+        if self.junction is not None:
+            self.junction = self.junction.build()
+            self.qualifies_as_junction = True
+        return self
+
+
+def _distance(a: Vector3, b: Vector3) -> int:
+    # Rockstar's path builder clamps every serialized link distance to the
+    # representable 1..255 range; zero is reserved for a degenerate link.
+    return max(1, min(255, int(b.distance_to(a))))
+
+
+@dataclasses.dataclass(slots=True)
+class Ynd:
+    version: int = 1
+    path: str = ""
+    game: GameTarget = GameTarget.GTA5
+    area_id: int | None = None
+    nodes: list[YndNode] = dataclasses.field(default_factory=list)
+    file_vft: int = 0x406203D0
+    file_unknown: int = 1
+    pages_info: YndResourcePagesInfo = dataclasses.field(default_factory=YndResourcePagesInfo)
+    unknown_24h: int = 0
+    unknown_34h: int = 0
+    unknown_48h: int = 1
+    unknown_4ch: int = 0
+    unknown_5ch: int = 0
+    unknown_68h: int = 0
+    unknown_6ch: int = 0
+    system_pages_count: int = 0
+    graphics_pages_count: int = 0
+
+    @classmethod
+    def from_nodes(
+        cls,
+        nodes: list[YndNode],
+        *,
+        area_id: int | None = None,
+        path: str | Path = "",
+        game: str | GameTarget = GameTarget.GTA5,
+        version: int = 1,
+    ) -> Ynd:
+        return cls(
+            version=int(version),
+            path=str(path) if path else "",
+            game=coerce_game_target(game),
+            area_id=area_id,
+            nodes=list(nodes),
+        )
+
+    @property
+    def vehicle_node_count(self) -> int:
+        return sum(1 for node in self.nodes if not node.is_ped_node)
+
+    @property
+    def ped_node_count(self) -> int:
+        return sum(1 for node in self.nodes if node.is_ped_node)
+
+    @property
+    def link_count(self) -> int:
+        return sum(len(node.links) for node in self.nodes)
+
+    @property
+    def junction_count(self) -> int:
+        return sum(1 for node in self.nodes if node.junction is not None)
+
+    def build(self) -> Ynd:
+        self.version = int(self.version)
+        self.game = coerce_game_target(self.game)
+        self.file_vft = int(self.file_vft) & 0xFFFFFFFF
+        self.file_unknown = int(self.file_unknown) & 0xFFFFFFFF
+        self.nodes = [node.build() for node in self.nodes]
+        if self.area_id is None:
+            node_area_ids = {int(node.area_id) for node in self.nodes if node.area_id is not None}
+            if len(node_area_ids) > 1:
+                raise ValueError("YND nodes reference multiple area_id values; set Ynd.area_id explicitly or normalize them")
+            self.area_id = next(iter(node_area_ids), 0)
+        self.area_id = int(self.area_id) & 0xFFFF
+        for node in self.nodes:
+            if node.area_id is None:
+                node.area_id = self.area_id
+            if not position_matches_ynd_area(self.area_id, node.position):
+                raise ValueError(
+                    f"YND node at ({node.position.x}, {node.position.y}) does not belong to area_id {self.area_id}; build a YndNetwork first"
+                )
+            for link in node.links:
+                if link.area_id is None:
+                    link.area_id = node.area_id
+        sorted_nodes = sorted(self.nodes, key=lambda node: (1 if node.is_ped_node else 0, int(node.node_id)))
+
+        id_map: dict[tuple[int, int], int] = {}
+        for new_node_id, node in enumerate(sorted_nodes):
+            old_key = (int(node.area_id), int(node.node_id))
+            id_map[old_key] = int(new_node_id)
+            node.node_id = new_node_id
+
+        node_lookup = {(int(node.area_id), int(node.node_id)): node for node in sorted_nodes}
+        for node in sorted_nodes:
+            for link in node.links:
+                target_key = (int(link.area_id), int(link.node_id))
+                new_target = id_map.get(target_key)
+                if new_target is not None:
+                    link.node_id = new_target
+                target_node = node_lookup.get((int(link.area_id), int(link.node_id)))
+                if target_node is not None:
+                    link.distance = _distance(node.position, target_node.position)
+
+        self.nodes = sorted_nodes
+        return self
+
+    def validate_storage_limits(self) -> ValidationReport:
+        issues = ValidationReport()
+        if len(self.nodes) > 0x10000:
+            issues.issue("ynd.nodes.capacity", "YND exceeds the 65536-node identifier range", path="nodes")
+        if self.link_count > 0xFFFF:
+            issues.issue("ynd.links.capacity", "YND exceeds the 65535-link offset range", path="nodes.links")
+        if self.junction_count > 0xFFFF:
+            issues.issue("ynd.junctions.capacity", "YND exceeds the 65535-junction index range", path="nodes.junction")
+
+        heightmap_cursor = 0
+        for index, node in enumerate(self.nodes):
+            path = f"nodes[{index}]"
+            if node.area_id is not None and not 0 <= int(node.area_id) <= 0xFFFF:
+                issues.issue("ynd.node.area_id.range", "area_id does not fit the 16-bit field", path=f"{path}.area_id")
+            if not 0 <= int(node.node_id) <= 0xFFFF:
+                issues.issue("ynd.node.node_id.range", "node_id does not fit the 16-bit field", path=f"{path}.node_id")
+            if len(node.links) > 31:
+                issues.issue("ynd.node.links.capacity", "node exceeds the 31-link packed count", path=f"{path}.links")
+            if not isinstance(node.position, Vector3) or not node.position.is_finite:
+                issues.issue("ynd.node.position.invalid", "position must contain three finite values", path=f"{path}.position")
+            else:
+                quantized = (
+                    round(node.position.x * 4.0),
+                    round(node.position.y * 4.0),
+                    round(node.position.z * 32.0),
+                )
+                if any(not -0x8000 <= value <= 0x7FFF for value in quantized):
+                    issues.issue("ynd.node.position.range", "position exceeds the signed 16-bit storage range", path=f"{path}.position")
+            for link_index, link in enumerate(node.links):
+                link_path = f"{path}.links[{link_index}]"
+                if link.area_id is not None and not 0 <= int(link.area_id) <= 0xFFFF:
+                    issues.issue("ynd.link.area_id.range", "area_id does not fit the 16-bit field", path=f"{link_path}.area_id")
+                if not 0 <= int(link.node_id) <= 0xFFFF:
+                    issues.issue("ynd.link.node_id.range", "node_id does not fit the 16-bit field", path=f"{link_path}.node_id")
+            if node.junction is None:
+                continue
+            junction = node.junction
+            if heightmap_cursor > 0xFFFF:
+                issues.issue("ynd.junction.heightmap_offset.range", "junction heightmap offset exceeds 16 bits", path=f"{path}.junction.heightmap")
+            if not 0 <= int(junction.heightmap_dim_x) <= 0xFF:
+                issues.issue("ynd.junction.heightmap_dim_x.range", "heightmap_dim_x exceeds 8 bits", path=f"{path}.junction.heightmap_dim_x")
+            if not 0 <= int(junction.heightmap_dim_y) <= 0xFF:
+                issues.issue("ynd.junction.heightmap_dim_y.range", "heightmap_dim_y exceeds 8 bits", path=f"{path}.junction.heightmap_dim_y")
+            junction_values = (
+                round(junction.max_z * 32.0),
+                round(junction.position.x * 4.0),
+                round(junction.position.y * 4.0),
+                round(junction.min_z * 32.0),
+            )
+            if any(not -0x8000 <= value <= 0x7FFF for value in junction_values):
+                issues.issue("ynd.junction.coordinates.range", "junction coordinates exceed signed 16-bit storage", path=f"{path}.junction")
+            heightmap_cursor += len(junction.heightmap)
+        return issues
+
+    def validate(self, *, context: BuildContext | None = None) -> ValidationReport:
+        del context
+        issues = self.validate_storage_limits()
+        if self.version != 1:
+            issues.issue("ynd.version.unsupported", "YND version must be 1", path="version")
+        for index, node in enumerate(self.nodes):
+            if node.junction is not None:
+                expected = node.junction.heightmap_dim_x * node.junction.heightmap_dim_y
+                if expected != len(node.junction.heightmap):
+                    issues.issue("ynd.junction.heightmap.count", f"Node {node.node_id} has a junction heightmap size mismatch", path=f"nodes[{index}].junction.heightmap")
+        return issues
+
+    def to_bytes(self) -> bytes:
+        from .writer import build_ynd_bytes
+
+        return build_ynd_bytes(self)
+
+    def save(self, destination: str | Path) -> Path:
+        from .writer import save_ynd
+
+        return save_ynd(self, destination)

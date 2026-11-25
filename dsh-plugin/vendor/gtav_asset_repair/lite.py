@@ -1,8 +1,10 @@
 """Build a `lite.ytd`: re-encode the textures of an existing dictionary at a smaller size.
 
-The pipeline is export -> resize (texconv) -> pack, all through CodeWalker so the
-container keeps its original generation (gen9 stays gen9). Every texture is decided
-before anything is written; the plan can be inspected without touching the archive.
+The pipeline is export -> resize (texconv) -> pack.  gen9 dictionaries are read and
+written through the vendored fivefury backend, which keeps every header field; gen8
+dictionaries still go through CodeWalker because fivefury's legacy writer drops the
+texture VFT.  Every texture is decided before anything is written, so the plan can
+be inspected without touching the archive.
 """
 from __future__ import annotations
 
@@ -14,7 +16,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Iterable
 
-from . import cw, dds, ytd as ytdmod
+from . import dds, settings, ytd as ytdmod, ytd_write
 
 MODE_CAP = "cap"
 MODE_TIER = "tier"
@@ -24,27 +26,7 @@ MODES = (MODE_CAP, MODE_TIER, MODE_AGGRESSIVE)
 TIERS = (1024, 1536, 2048)
 MIN_SIDE = 1024
 
-def _find_resource(name: str) -> str:
-    """Locate a bundled .ps1: PyInstaller temp dir, exe dir, then the source tree."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    candidates = []
-    mei = getattr(sys, "_MEIPASS", "")
-    if mei:
-        candidates.append(os.path.join(mei, name))
-        candidates.append(os.path.join(mei, "resources", name))
-    exe_dir = os.path.dirname(os.path.abspath(sys.argv[0] or ""))
-    candidates.append(os.path.join(exe_dir, name))
-    candidates.append(os.path.join(exe_dir, "resources", name))
-    candidates.append(os.path.join(here, name))
-    candidates.append(os.path.join(here, "..", "..", "resources", name))
-    candidates.append(os.path.join(os.getcwd(), "resources", name))
-    for path in candidates:
-        if path and os.path.isfile(path):
-            return os.path.abspath(path)
-    return os.path.abspath(os.path.join(here, "..", "..", "resources", name))
 
-DEFAULT_EXPORT_PS1 = _find_resource("ytd_export.ps1")
-DEFAULT_PACK_PS1 = _find_resource("pack_ytd.ps1")
 
 NORMAL_HINTS = ("_n", "_nrm", "_normal", "normal")
 KEEP_FORMAT_HINTS = ("spec", "gloss", "dirt", "decal", "_s_", "mask", "script_rt")
@@ -142,15 +124,16 @@ def _format_for(entry: Entry, alpha_used: bool, grayscale: bool) -> str:
 
 def plan(entries: Iterable[Entry], mode: str, cap: int = 2048,
          pixels: dict[str, tuple[bool, bool]] | None = None) -> list[Step]:
-    """Decide what to do with every texture. `pixels` maps name -> (alpha_used, grayscale)."""
+    """Decide what to do with every texture. `pixels` maps name -> (alpha_used, grayscale).
+    """
     steps: list[Step] = []
     for entry in entries:
         step = Step(entry=entry, new_width=entry.width, new_height=entry.height,
                     new_mips=entry.mips, new_format=entry.format)
         long_side = max(entry.width, entry.height)
         if long_side < MIN_SIDE:
-            step.skip = True
-            step.reason = "below %d px" % MIN_SIDE
+            step.skip = not step.reformat
+            step.reason = "" if step.reformat else "below %d px" % MIN_SIDE
             steps.append(step)
             continue
         size = target_size(entry.width, entry.height, mode, cap)
@@ -268,27 +251,6 @@ def read_entries(xml_path: str) -> list[Entry]:
     return entries
 
 
-def write_entries(xml_path: str, steps: list[Step]) -> None:
-    """Update the per-item size/mip/format fields to match what texconv produced."""
-    with open(xml_path, encoding="utf-8") as fh:
-        text = fh.read()
-    by_name = {step.entry.name: step for step in steps if step.changed}
-
-    def repl(match):
-        block = match.group(0)
-        name = _tag(block, "Name")
-        step = by_name.get(name)
-        if step is None:
-            return block
-        block = re.sub(r"<Width value=\"\d+\" />", '<Width value="%d" />' % step.new_width, block)
-        block = re.sub(r"<Height value=\"\d+\" />", '<Height value="%d" />' % step.new_height, block)
-        block = re.sub(r"<MipLevels value=\"\d+\" />", '<MipLevels value="%d" />' % step.new_mips, block)
-        block = re.sub(r"<Format>[^<]*</Format>", "<Format>%s</Format>" % step.new_format, block)
-        return block
-
-    text = _ITEM_RE.sub(repl, text)
-    with open(xml_path, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write(text)
 
 
 # --------------------------------------------------------------- pixel probing
@@ -317,37 +279,19 @@ def probe_pixels(dds_path: str, png_dir: str, texconv: str, samples: int = 4096)
 
 # ------------------------------------------------------------------- pipeline
 
-def _ps1_error(stderr: str, stdout: str) -> str:
-    """Pull the human readable message out of PowerShell's error noise."""
-    lines = [ln.strip() for ln in (stderr or stdout or "").splitlines() if ln.strip()]
-    keep = []
-    for line in lines:
-        if line.startswith("+") or line.startswith("At ") or line.startswith("CategoryInfo") \
-                or line.startswith("FullyQualifiedErrorId"):
-            continue
-        keep.append(line)
-    for line in keep:
-        if ".ps1 :" in line:                    # drop the script path PowerShell prefixes
-            line = line.split(".ps1 :", 1)[1].strip()
-        if "Load" in line and ("异常" in line or "Exception" in line or "调用" in line):
-            return "CodeWalker could not read this archive (corrupt, or not a texture dictionary)"
-        if "Texture file not found:" in line:
-            missing = line.split("Texture file not found:", 1)[1].strip()
-            return "the export is missing a texture file (%s); the archive cannot be rebuilt" % missing
-        if "Exception calling" in line and ":" in line:
-            continue
-        if "Exception" in line and len(keep) == 1:
-            return line[:400]
-    if keep:
-        return keep[0][:400]
-    return "PowerShell failed without a message"
 
 
 def _decode(raw: bytes) -> str:
-    """PowerShell writes GBK on a Chinese Windows console; try UTF-8 first, then GBK."""
+    """Decode PowerShell output written in the console's ANSI code page.
+
+    GBK must be tried first: on a Chinese Windows the bytes are GBK, and a GBK
+    sequence is usually *also* valid UTF-8, so decoding UTF-8 first returns
+    mojibake without raising (e.g. "使用" -> "ʹ\ufffd"). Real UTF-8 fails the GBK
+    decode and falls through.
+    """
     if not raw:
         return ""
-    for encoding in ("utf-8", "gbk"):
+    for encoding in ("gbk", "utf-8"):
         try:
             return raw.decode(encoding)
         except UnicodeDecodeError:
@@ -355,13 +299,6 @@ def _decode(raw: bytes) -> str:
     return raw.decode("utf-8", "replace")
 
 
-def _run_ps1(args: list[str]) -> str:
-    proc = subprocess.run(["powershell.exe", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass"] + args,
-                          capture_output=True,
-                          creationflags=_NO_WINDOW, startupinfo=_HIDDEN)
-    if proc.returncode != 0:
-        raise RuntimeError(_ps1_error(_decode(proc.stderr), _decode(proc.stdout)))
-    return _decode(proc.stdout)
 
 
 _TEXCONV_FMT = {
@@ -382,62 +319,70 @@ _TEXCONV_FMT = {
 }
 
 
-def _placeholder(path: str, entry: Entry, texconv: str, scratch: str) -> None:
-    """Write a blank texture so a dictionary missing an export file can still be packed."""
-    from PIL import Image
-
-    fmt = _TEXCONV_FMT.get(entry.format.upper(), "")
-    if not fmt:
-        raise RuntimeError("cannot rebuild missing texture %s (format %s)" % (entry.name, entry.format))
-    tmp = os.path.join(scratch, "blank-%s.png" % uuid.uuid4().hex[:8])
-    Image.new("RGBA", (max(4, entry.width), max(4, entry.height)), (0, 0, 0, 0)).save(tmp)
-    out_dir = os.path.dirname(path)
-    dds._run_hidden([dds.resolve_texconv(texconv), "-y", "-o", out_dir,
-                     "-w", str(max(4, entry.width)), "-h", str(max(4, entry.height)),
-                     "-m", str(max(1, entry.mips)), "-f", fmt, tmp])
-    made = os.path.join(out_dir, os.path.splitext(os.path.basename(tmp))[0] + ".dds")
-    if not os.path.exists(made):
-        raise RuntimeError("could not rebuild missing texture %s" % entry.name)
-    if os.path.exists(path):
-        os.remove(path)
-    os.replace(made, path)
 
 
-def export(ytd_path: str, work_dir: str, core_dir: str = "", legacy: bool = False,
-           texconv: str = "") -> str:
-    """Export the dictionary to `work_dir`; return the XML path."""
-    core = cw.find_corewalker(core_dir or None, start=os.path.dirname(os.path.abspath(ytd_path)))
-    if core is None:
-        raise RuntimeError(cw.MISSING_HINT)
-    args = ["-File", DEFAULT_EXPORT_PS1, "-Ytd", ytd_path, "-OutDir", work_dir, "-CoreDir", core]
-    if legacy:
-        args.append("-Legacy")
-    _run_ps1(args)
-    stem = os.path.splitext(os.path.basename(ytd_path))[0]
-    xml = os.path.join(work_dir, stem + ".ytd.xml")
-    if not os.path.exists(xml):
-        raise RuntimeError("export produced no XML: %s" % xml)
-    entries = read_entries(xml)
-    missing = [e for e in entries if e.file and not os.path.exists(os.path.join(work_dir, e.file))]
-    if missing:
-        if not texconv:
-            names = ", ".join(e.file for e in missing[:4])
-            raise RuntimeError("the export is missing %d texture file(s): %s" % (len(missing), names))
-        for entry in missing:
-            _placeholder(os.path.join(work_dir, entry.file), entry, texconv, work_dir)
-    return xml
 
 
-def pack(xml_path: str, build_dir: str, out_path: str, original: str, core_dir: str = "",
-         legacy: bool = False) -> str:
-    core = cw.find_corewalker(core_dir or None, start=os.path.dirname(os.path.abspath(original)))
-    if core is None:
-        raise RuntimeError(cw.MISSING_HINT)
-    args = ["-File", DEFAULT_PACK_PS1, "-Xml", xml_path, "-Build", build_dir, "-Out", out_path,
-            "-CoreDir", core, "-Original", original]
-    if legacy:
-        args.append("-Legacy")
-    return _run_ps1(args)
+
+
+_D3DFMT = {
+    "BC1": "D3DFMT_DXT1",
+    "BC2": "D3DFMT_DXT3",
+    "BC3": "D3DFMT_DXT5",
+    "BC4": "D3DFMT_ATI1",
+    "BC5": "D3DFMT_ATI2",
+    "BC6H": "D3DFMT_BC6H",
+    "BC7": "D3DFMT_BC7",
+    "A8R8G8B8": "D3DFMT_A8R8G8B8",
+    "R8G8B8A8": "D3DFMT_A8B8G8R8",
+    "B5G6R5": "D3DFMT_R5G6B5",
+    "B5G5R5A1": "D3DFMT_A1R5G5B5",
+    "R8": "D3DFMT_L8",
+    "A8": "D3DFMT_A8",
+}
+
+
+def _d3dfmt(texture) -> str:
+    return _D3DFMT.get(texture.format.name, "D3DFMT_" + texture.format.name)
+
+
+def export_native(ytd_path: str, folder: str):
+    """Write every texture as DDS and describe it; returns (dictionary, raw, entries).
+
+    `dictionary` is the fivefury archive the DDS files were cut from -- pass it
+    back to `pack_native` so edits are merged into the same object.
+    """
+    with open(ytd_path, "rb") as fh:
+        raw = fh.read()
+    y = ytd_write._y()
+    dictionary = y.read_ytd(raw)
+    entries = []
+    for texture in dictionary.textures:
+        name = texture.name + ".dds"
+        texture.save_dds(os.path.join(folder, name))
+        entries.append(Entry(name=texture.name, file=name, width=texture.width,
+                             height=texture.height, mips=texture.mip_count,
+                             format=_d3dfmt(texture), usage=texture.usage.name))
+    return dictionary, raw, entries
+
+
+def pack_native(dictionary, raw: bytes, folder: str, out_path: str, names) -> str:
+    """Re-read the named DDS files into `dictionary` and write the archive.
+
+    Only textures listed in `names` are re-read.  fivefury exports formats our DDS
+    reader cannot map back (a stock normal map can be `R16G16B16A16_UNORM`, DXGI 65),
+    and a texture texconv never touched has nothing to re-read anyway.
+    """
+    changed = set(names)
+    for index, texture in enumerate(dictionary.textures):
+        if texture.name not in changed:
+            continue
+        path = os.path.join(folder, texture.name + ".dds")
+        if not os.path.exists(path):
+            raise FileNotFoundError("missing texture file: %s" % os.path.basename(path))
+        dictionary.textures[index] = ytd_write.texture_from_dds(texture.name, path, like=texture)
+    return ytd_write.save(dictionary, out_path, source=raw,
+                          keep_size_flags=not ytd_write.is_gen9(raw))
 
 
 def _apply_one(step: Step, folder: str, texconv: str, work_dir: str) -> None:
@@ -481,36 +426,59 @@ def _publish(final: str, built: str) -> str:
     """Move a freshly built archive onto *final*, keeping the old copy as .bak."""
     if os.path.abspath(final) == os.path.abspath(built):
         return ""
-    bak = final + ".bak"
-    if os.path.exists(bak):
-        try:
-            os.remove(bak)
-        except OSError:
-            pass
     backup = ""
-    if os.path.exists(final):
-        try:
-            os.replace(final, bak)
-            backup = bak
-        except OSError:
-            pass
+    if settings.keep_bak():
+        bak = final + ".bak"
+        if os.path.exists(bak):
+            try:
+                os.remove(bak)
+            except OSError:
+                pass
+        if os.path.exists(final):
+            try:
+                os.replace(final, bak)
+                backup = bak
+            except OSError:
+                pass
     os.replace(built, final)
     return backup
 
 
+def _readonly(path: str) -> bool:
+    """True when the file exists and carries the read-only attribute."""
+    try:
+        return not (os.stat(path).st_mode & 0o200)
+    except OSError:
+        return False
+
+
+def _refuse_readonly(path: str, flag: str) -> None:
+    if _readonly(path):
+        raise RuntimeError("%s is read-only; clear the attribute or drop %s"
+                           % (os.path.basename(path), flag))
+
+
 def make_lite(ytd_path: str, out_path: str = "", mode: str = MODE_CAP, cap: int = 2048,
-              core_dir: str = "", texconv: str = "", report_path: str = "",
+              core_dir: str = "", texconv: str = "",
               progress=None, inplace: bool = False) -> tuple[str, str]:
     """Compress one dictionary; return (output path, report text)."""
     if mode not in MODES:
         raise ValueError("unknown mode: %s" % mode)
     ytd_path = os.path.abspath(ytd_path)
+    if inplace:
+        _refuse_readonly(ytd_path, "--inplace")
     version = ytdmod.rsc7_version(ytd_path)
     if version is None:
         raise ValueError("%s is not an RSC7 archive (bad or missing header)" % os.path.basename(ytd_path))
     if version not in (ytdmod.YTD_VERSION_GEN9, ytdmod.YTD_VERSION_LEGACY):
         raise ValueError("%s has RSC7 version %s - not a texture dictionary" % (os.path.basename(ytd_path), version))
-    legacy = version == ytdmod.YTD_VERSION_LEGACY
+    # gen8 dictionaries now round-trip through fivefury as well (patch #2 in
+    # ytd_write.py keeps the four legacy header fields fivefury drops), so the
+    # CodeWalker path is only used when explicitly forced with
+    # GTA_LITE_LEGACY_CW=1.  Keep it as an escape hatch: the legacy stride
+    # field is preserved on an unchanged geometry but recomputed when lite
+    # shrinks a texture, and that case has no in-game verification yet.
+    legacy = False  # the CodeWalker write path is gone (2026-11-25)
 
     if out_path:
         final = os.path.abspath(out_path)
@@ -526,8 +494,13 @@ def make_lite(ytd_path: str, out_path: str = "", mode: str = MODE_CAP, cap: int 
     os.makedirs(folder, exist_ok=True)
     os.makedirs(png_dir, exist_ok=True)
     try:
-        xml = export(ytd_path, folder, core_dir=core_dir, legacy=legacy, texconv=texconv)
-        entries = read_entries(xml)
+        if legacy:
+            raise RuntimeError("the CodeWalker export path was removed; legacy archives are read natively")
+            entries = read_entries(xml)
+            dictionary = raw = None
+        else:
+            dictionary, raw, entries = export_native(ytd_path, folder)
+            xml = None
         pixels = {}
         for entry in entries:
             if max(entry.width, entry.height) < MIN_SIDE or mode != MODE_AGGRESSIVE:
@@ -550,8 +523,11 @@ def make_lite(ytd_path: str, out_path: str = "", mode: str = MODE_CAP, cap: int 
         built = os.path.join(scratch, "out.ytd")
         if progress:
             progress(total, total, "writing %s" % os.path.basename(final))
-        write_entries(xml, steps)
-        pack(xml, folder, built, ytd_path, core_dir=core_dir, legacy=legacy)
+        if legacy:
+            write_entries(xml, steps)
+            raise RuntimeError("the CodeWalker pack path was removed; legacy archives are written by ytd_write")
+        else:
+            pack_native(dictionary, raw, folder, built, [step.entry.name for step in changed])
         check = ytdmod.inspect([built], core_dir=core_dir, legacy=legacy)
         if check and check[0].error:
             raise RuntimeError("written archive cannot be read back: %s" % check[0].error)
@@ -561,9 +537,6 @@ def make_lite(ytd_path: str, out_path: str = "", mode: str = MODE_CAP, cap: int 
         report = report_header(steps, ytd_path, final) + "\n" + plan_text(steps)
         if backup:
             report += "\nprevious file kept as %s" % os.path.basename(backup)
-        report_path = report_path or (os.path.splitext(final)[0] + "_report.txt")
-        with open(report_path, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(report + "\n")
         return final, report
     finally:
         import shutil
@@ -575,12 +548,20 @@ def fix_mips(ytd_path: str, out_path: str = "", core_dir: str = "", texconv: str
              inplace: bool = False) -> tuple[str, str]:
     """Rebuild one dictionary with full mip chains; returns (output path, report text)."""
     ytd_path = os.path.abspath(ytd_path)
+    if inplace:
+        _refuse_readonly(ytd_path, "--inplace")
     version = ytdmod.rsc7_version(ytd_path)
     if version is None:
         raise ValueError("%s is not an RSC7 archive (bad or missing header)" % os.path.basename(ytd_path))
     if version not in (ytdmod.YTD_VERSION_GEN9, ytdmod.YTD_VERSION_LEGACY):
         raise ValueError("%s has RSC7 version %s - not a texture dictionary" % (os.path.basename(ytd_path), version))
-    legacy = version == ytdmod.YTD_VERSION_LEGACY
+    # gen8 dictionaries now round-trip through fivefury as well (patch #2 in
+    # ytd_write.py keeps the four legacy header fields fivefury drops), so the
+    # CodeWalker path is only used when explicitly forced with
+    # GTA_LITE_LEGACY_CW=1.  Keep it as an escape hatch: the legacy stride
+    # field is preserved on an unchanged geometry but recomputed when lite
+    # shrinks a texture, and that case has no in-game verification yet.
+    legacy = False  # the CodeWalker write path is gone (2026-11-25)
 
     if out_path:
         final = os.path.abspath(out_path)
@@ -594,8 +575,13 @@ def fix_mips(ytd_path: str, out_path: str = "", core_dir: str = "", texconv: str
     folder = os.path.join(scratch, "tex")
     os.makedirs(folder, exist_ok=True)
     try:
-        xml = export(ytd_path, folder, core_dir=core_dir, legacy=legacy, texconv=texconv)
-        entries = read_entries(xml)
+        if legacy:
+            raise RuntimeError("the CodeWalker export path was removed; legacy archives are read natively")
+            entries = read_entries(xml)
+            dictionary = raw = None
+        else:
+            dictionary, raw, entries = export_native(ytd_path, folder)
+            xml = None
         pending = []
         for entry in entries:
             if entry.name.lower().startswith("script_rt"):
@@ -621,27 +607,31 @@ def fix_mips(ytd_path: str, out_path: str = "", core_dir: str = "", texconv: str
             if progress:
                 progress(index, total, entry.name)
 
-        by_name = {entry.name: need for entry, need in fixed}
-        with open(xml, encoding="utf-8") as fh:
-            text = fh.read()
+        if legacy:
+            by_name = {entry.name: need for entry, need in fixed}
+            with open(xml, encoding="utf-8") as fh:
+                text = fh.read()
 
-        def repl(match):
-            block = match.group(0)
-            name = _tag(block, "Name")
-            need = by_name.get(name)
-            if need is None:
-                return block
-            return re.sub(r"<MipLevels value=\"\d+\" />",
-                          '<MipLevels value="%d" />' % need, block)
+            def repl(match):
+                block = match.group(0)
+                name = _tag(block, "Name")
+                need = by_name.get(name)
+                if need is None:
+                    return block
+                return re.sub(r"<MipLevels value=\"\d+\" />",
+                              '<MipLevels value="%d" />' % need, block)
 
-        text = _ITEM_RE.sub(repl, text)
-        with open(xml, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(text)
+            text = _ITEM_RE.sub(repl, text)
+            with open(xml, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(text)
 
         built = os.path.join(scratch, "out.ytd")
         if progress:
             progress(total, total, "writing %s" % os.path.basename(final))
-        pack(xml, folder, built, ytd_path, core_dir=core_dir, legacy=legacy)
+        if legacy:
+            raise RuntimeError("the CodeWalker pack path was removed; legacy archives are written by ytd_write")
+        else:
+            pack_native(dictionary, raw, folder, built, [entry.name for entry, _need in fixed])
         check = ytdmod.inspect([built], core_dir=core_dir, legacy=legacy)
         if check and check[0].error:
             raise RuntimeError("written archive cannot be read back: %s" % check[0].error)
@@ -651,9 +641,6 @@ def fix_mips(ytd_path: str, out_path: str = "", core_dir: str = "", texconv: str
                                                 entry.format, entry.mips, need)
                  for entry, need in fixed]
         report = "\n".join(lines)
-        report_path = os.path.splitext(final)[0] + "_report.txt"
-        with open(report_path, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(report + "\n")
         return final, report
     finally:
         import shutil

@@ -1,0 +1,114 @@
+from __future__ import annotations
+
+import dataclasses
+from typing import Any
+
+from ..common import dataclass_init_values
+from ..map_extensions import (
+    ExtensionContainer,
+    extensions_from_meta,
+    extensions_to_meta,
+)
+from ..meta.defs import meta_name
+from ..metahash import HashLike, MetaHash, MetaHashFieldsMixin
+from ..vector import Vector3
+from .asset_types import ArchetypeAssetType, coerce_archetype_asset_type
+from .lod import infer_archetype_hd_texture_dist, infer_archetype_lod_dist
+
+
+@dataclasses.dataclass(slots=True)
+class BaseArchetypeDef(MetaHashFieldsMixin, ExtensionContainer):
+    _hash_fields = ("name", "texture_dictionary", "clip_dictionary", "drawable_dictionary", "physics_dictionary", "asset_name")
+
+    lod_dist: float = 0.0
+    flags: int = 0
+    special_attribute: int = 0
+    bb_min: Vector3 = dataclasses.field(default_factory=Vector3)
+    bb_max: Vector3 = dataclasses.field(default_factory=Vector3)
+    bs_centre: Vector3 = dataclasses.field(default_factory=Vector3)
+    bs_radius: float = 0.0
+    hd_texture_dist: float = 0.0
+    name: MetaHash | HashLike = 0
+    texture_dictionary: MetaHash | HashLike = 0
+    clip_dictionary: MetaHash | HashLike = 0
+    drawable_dictionary: MetaHash | HashLike = 0
+    physics_dictionary: MetaHash | HashLike = 0
+    asset_type: ArchetypeAssetType = ArchetypeAssetType.UNINITIALIZED
+    asset_name: MetaHash | HashLike = 0
+    extensions: list[Any] = dataclasses.field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        for name in ("bb_min", "bb_max", "bs_centre"):
+            if not isinstance(getattr(self, name), Vector3):
+                raise TypeError(f"BaseArchetypeDef.{name} must be a Vector3")
+        self.asset_type = coerce_archetype_asset_type(self.asset_type)
+        if self.asset_name in (0, "") and self.name not in (0, ""):
+            self.asset_name = self.name
+        if self.lod_dist <= 0.0:
+            self.lod_dist = infer_archetype_lod_dist(
+                bs_radius=self.bs_radius,
+                bb_min=self.bb_min,
+                bb_max=self.bb_max,
+            )
+        if self.hd_texture_dist <= 0.0:
+            self.hd_texture_dist = infer_archetype_hd_texture_dist(
+                bs_radius=self.bs_radius,
+                lod_dist=self.lod_dist,
+                bb_min=self.bb_min,
+                bb_max=self.bb_max,
+            )
+
+    def to_meta(self) -> dict[str, Any]:
+        return {
+            "lodDist": self.lod_dist,
+            "flags": self.flags,
+            "specialAttribute": self.special_attribute,
+            "bbMin": self.bb_min,
+            "bbMax": self.bb_max,
+            "bsCentre": self.bs_centre,
+            "bsRadius": self.bs_radius,
+            "hdTextureDist": self.hd_texture_dist,
+            "name": self.name,
+            "textureDictionary": self.texture_dictionary,
+            "clipDictionary": self.clip_dictionary,
+            "drawableDictionary": self.drawable_dictionary,
+            "physicsDictionary": self.physics_dictionary,
+            "assetType": int(self.asset_type),
+            "assetName": self.asset_name,
+            "extensions": extensions_to_meta(self.extensions),
+            "_meta_name_hash": meta_name("CBaseArchetypeDef"),
+        }
+
+    @classmethod
+    def from_meta(cls, value: Any) -> BaseArchetypeDef:
+        archetype = cls(
+            lod_dist=float(value.get("lodDist", 0.0)),
+            flags=int(value.get("flags", 0)),
+            special_attribute=int(value.get("specialAttribute", 0)),
+            bb_min=Vector3.from_iterable(value.get("bbMin", (0.0, 0.0, 0.0))),
+            bb_max=Vector3.from_iterable(value.get("bbMax", (0.0, 0.0, 0.0))),
+            bs_centre=Vector3.from_iterable(value.get("bsCentre", (0.0, 0.0, 0.0))),
+            bs_radius=float(value.get("bsRadius", 0.0)),
+            hd_texture_dist=float(value.get("hdTextureDist", 0.0)),
+            name=value.get("name", 0),
+            texture_dictionary=value.get("textureDictionary", 0),
+            clip_dictionary=value.get("clipDictionary", 0),
+            drawable_dictionary=value.get("drawableDictionary", 0),
+            physics_dictionary=value.get("physicsDictionary", 0),
+            asset_type=value.get("assetType", ArchetypeAssetType.UNINITIALIZED),
+            asset_name=value.get("assetName", 0),
+            extensions=extensions_from_meta(value.get("extensions", []) or []),
+        )
+        archetype.lod_dist = float(value.get("lodDist", 0.0))
+        archetype.hd_texture_dist = float(value.get("hdTextureDist", 0.0))
+        return archetype
+
+
+def _base_archetype_values(archetype: BaseArchetypeDef) -> dict[str, Any]:
+    return dataclass_init_values(archetype, BaseArchetypeDef)
+
+
+Archetype = BaseArchetypeDef
+
+
+__all__ = ["Archetype", "BaseArchetypeDef"]

@@ -1,0 +1,925 @@
+from __future__ import annotations
+
+import dataclasses
+import enum
+import math
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
+
+from ..matrix import Matrix4
+from ..vector import Vector3
+from .events import YftPhysicsChildEvents, YftPhysicsGroupEvents
+from .resource_headers import (
+    FRAG_PHYS_ARCHETYPE_DAMP_VFT,
+    FRAG_PHYS_TRANSFORMS_VFT,
+    FRAG_PHYSICS_LOD_VFT,
+    FRAG_TYPE_CHILD_VFT,
+    PH_JOINT_1DOF_TYPE_VFT,
+    PH_JOINT_3DOF_TYPE_VFT,
+    RESOURCE_STATE,
+)
+
+if TYPE_CHECKING:
+    from ..bounds import Bound
+    from ..ydr import Ydr, YdrBuild
+    from .bound_profiles import YftPhysicsBoundProfile
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class YftPhysicsLodPointers:
+    high: int = 0
+    medium: int = 0
+    low: int = 0
+
+    @property
+    def has_physics(self) -> bool:
+        return any(self.values())
+
+    @property
+    def active_count(self) -> int:
+        return sum(1 for pointer in self.values() if pointer)
+
+    def items(self) -> tuple[tuple[str, int], ...]:
+        return (("high", self.high), ("medium", self.medium), ("low", self.low))
+
+    def values(self) -> tuple[int, int, int]:
+        return (self.high, self.medium, self.low)
+
+
+class YftPhysicsGroupFlag(enum.IntFlag):
+    NONE = 0
+    DISAPPEARS_WHEN_DEAD = 1 << 0
+    MADE_OF_GLASS = 1 << 1
+    DAMAGE_WHEN_BROKEN = 1 << 2
+    DOESNT_AFFECT_VEHICLES = 1 << 3
+    DOESNT_PUSH_VEHICLES_DOWN = 1 << 4
+    HAS_CLOTH = 1 << 5
+
+
+class YftPhysicsDampingKind(enum.IntEnum):
+    LINEAR_CONSTANT = 0
+    LINEAR_VELOCITY = 1
+    LINEAR_VELOCITY_SQUARED = 2
+    ANGULAR_CONSTANT = 3
+    ANGULAR_VELOCITY = 4
+    ANGULAR_VELOCITY_SQUARED = 5
+
+
+class YftPhysicsJointType(enum.IntEnum):
+    ONE_DOF = 0
+    THREE_DOF = 1
+    PRISMATIC = 2
+    INVALID = 255
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class YftPhysicsJoint:
+    joint_type: YftPhysicsJointType
+    parent_link_index: int
+    child_link_index: int
+    orientation_parent: Matrix4
+    orientation_child: Matrix4
+    default_stiffness: float = 0.825
+    enforce_exceeded_limits: bool = False
+    vft: int = 0
+    resource_state: int = 1
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class YftPhysicsJoint1Dof(YftPhysicsJoint):
+    joint_type: YftPhysicsJointType = dataclasses.field(
+        default=YftPhysicsJointType.ONE_DOF, init=False
+    )
+    hard_angle_min: float = 0.0
+    hard_angle_max: float = 0.0
+    max_muscle_torque: float = 100_000_000.0
+    min_muscle_torque: float = -100_000_000.0
+    vft: int = PH_JOINT_1DOF_TYPE_VFT
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class YftPhysicsJoint3Dof(YftPhysicsJoint):
+    joint_type: YftPhysicsJointType = dataclasses.field(
+        default=YftPhysicsJointType.THREE_DOF, init=False
+    )
+    hard_first_lean_angle_max: float = 0.0
+    hard_second_lean_angle_max: float = 0.0
+    hard_twist_angle_max: float = 0.0
+    soft_limit_ratio: float = 1.0
+    twist_offset: float = 0.0
+    use_child_for_twist_axis: bool = False
+    max_muscle_torque: Vector3 = Vector3(*(100_000_000.0,) * 3)
+    min_muscle_torque: Vector3 = Vector3(*(-100_000_000.0,) * 3)
+    soft_limit_lean_strength: float = 1.0
+    soft_limit_twist_strength: float = 1.0
+    vft: int = PH_JOINT_3DOF_TYPE_VFT
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.max_muscle_torque, Vector3):
+            raise TypeError("max_muscle_torque must be a Vector3")
+        if not isinstance(self.min_muscle_torque, Vector3):
+            raise TypeError("min_muscle_torque must be a Vector3")
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class YftPhysicsGroup:
+    name: str = ""
+    pointer: int = 0
+    strength: float = 0.0
+    force_transmission_scale_up: float = 0.0
+    force_transmission_scale_down: float = 0.0
+    joint_stiffness: float = 0.0
+    min_soft_angle_1: float = 0.0
+    max_soft_angle_1: float = 0.0
+    max_soft_angle_2: float = 0.0
+    max_soft_angle_3: float = 0.0
+    rotation_speed: float = 0.0
+    rotation_strength: float = 0.0
+    restoring_strength: float = 0.0
+    restoring_max_torque: float = 0.0
+    latch_strength: float = 0.0
+    total_undamaged_mass: float = 0.0
+    total_damaged_mass: float | None = None
+    child_groups_pointers_index: int = 0xFF
+    parent_group_pointer_index: int = 0xFF
+    child_index: int = 0xFF
+    num_children: int = 0
+    num_child_groups: int = 0
+    glass_model_and_type: int = 0xFF
+    glass_pane_model_info_index: int = 0
+    authored_glass_type: int | None = dataclasses.field(
+        default=None, repr=False, compare=False
+    )
+    flags: YftPhysicsGroupFlag = YftPhysicsGroupFlag.NONE
+    min_damage_force: float = 0.0
+    damage_health: float = 0.0
+    weapon_health: float = 0.0
+    weapon_scale: float = 0.0
+    vehicle_scale: float = 0.0
+    ped_scale: float = 0.0
+    ragdoll_scale: float = 0.0
+    explosion_scale: float = 0.0
+    object_scale: float = 0.0
+    ped_inv_mass_scale: float = 0.0
+    preset_applied: int = 0
+    debug_name: str = ""
+    melee_scale: float = 0.0
+    children: tuple[YftPhysicsChild, ...] = dataclasses.field(
+        default=(), repr=False, compare=False
+    )
+    child_group_indices: tuple[int, ...] = ()
+    child_group_names: tuple[str, ...] = ()
+    events: YftPhysicsGroupEvents = dataclasses.field(
+        default_factory=YftPhysicsGroupEvents
+    )
+
+    @property
+    def is_root_group(self) -> bool:
+        return self.parent_group_pointer_index == 0xFF
+
+    @property
+    def is_damageable(self) -> bool:
+        return self.damage_health != 0.0
+
+    @property
+    def is_initially_latched(self) -> bool:
+        return self.latch_strength == -1.0 or self.latch_strength > 0.0
+
+    @property
+    def disappears_when_dead(self) -> bool:
+        return bool(self.flags & YftPhysicsGroupFlag.DISAPPEARS_WHEN_DEAD)
+
+    @property
+    def is_glass(self) -> bool:
+        return bool(self.flags & YftPhysicsGroupFlag.MADE_OF_GLASS)
+
+    @property
+    def damages_when_broken(self) -> bool:
+        return bool(self.flags & YftPhysicsGroupFlag.DAMAGE_WHEN_BROKEN)
+
+    @property
+    def has_cloth(self) -> bool:
+        return bool(self.flags & YftPhysicsGroupFlag.HAS_CLOTH)
+
+    @property
+    def affects_vehicles(self) -> bool:
+        return not bool(self.flags & YftPhysicsGroupFlag.DOESNT_AFFECT_VEHICLES)
+
+    @property
+    def pushes_vehicles_down(self) -> bool:
+        return not bool(self.flags & YftPhysicsGroupFlag.DOESNT_PUSH_VEHICLES_DOWN)
+
+    @property
+    def is_legacy_glass(self) -> bool:
+        return self.glass_model_and_type != 0xFF
+
+    @property
+    def legacy_glass_model_index(self) -> int:
+        return self.glass_model_and_type & 0x1F
+
+    @property
+    def legacy_glass_type_index(self) -> int:
+        return self.glass_model_and_type >> 5
+
+    @classmethod
+    def declare(
+        cls,
+        name: str = "",
+        *,
+        children: Sequence[YftPhysicsChild] = (),
+        child_groups: Sequence[int | str] = (),
+        flags: YftPhysicsGroupFlag | int = YftPhysicsGroupFlag.NONE,
+        glass_pane_index: int | None = None,
+        strength: float = 0.0,
+        total_undamaged_mass: float | None = None,
+        total_damaged_mass: float | None = None,
+        debug_name: str = "",
+    ) -> YftPhysicsGroup:
+        declared_children = tuple(children)
+        undamaged_mass = (
+            float(total_undamaged_mass)
+            if total_undamaged_mass is not None
+            else sum(child.undamaged_mass for child in declared_children)
+        )
+        declared_flags = YftPhysicsGroupFlag(flags)
+        if glass_pane_index is not None:
+            if not declared_children:
+                raise ValueError("glass groups require at least one physics child")
+            if not 0 <= int(glass_pane_index) <= 0xFF:
+                raise ValueError("glass_pane_index must fit in an unsigned byte")
+            declared_flags |= YftPhysicsGroupFlag.MADE_OF_GLASS
+        return cls(
+            name=str(name),
+            strength=float(strength),
+            total_undamaged_mass=undamaged_mass,
+            total_damaged_mass=(
+                float(total_damaged_mass) if total_damaged_mass is not None else None
+            ),
+            child_index=0 if declared_children else 0xFF,
+            num_children=len(declared_children),
+            num_child_groups=len(child_groups),
+            glass_pane_model_info_index=(
+                int(glass_pane_index) if glass_pane_index is not None else 0
+            ),
+            flags=declared_flags,
+            debug_name=debug_name or str(name),
+            children=declared_children,
+            child_group_names=tuple(
+                str(value) for value in child_groups if isinstance(value, str)
+            ),
+            child_group_indices=tuple(
+                int(value) for value in child_groups if not isinstance(value, str)
+            ),
+        )
+
+    @classmethod
+    def declare_glass(
+        cls,
+        name: str,
+        *,
+        glass_type: int = 0,
+        pane_index: int | None = None,
+        children: Sequence[YftPhysicsChild],
+        child_groups: Sequence[int | str] = (),
+        flags: YftPhysicsGroupFlag | int = YftPhysicsGroupFlag.NONE,
+        strength: float = 0.0,
+        total_undamaged_mass: float | None = None,
+        total_damaged_mass: float | None = None,
+        debug_name: str = "",
+    ) -> YftPhysicsGroup:
+        if not 0 <= int(glass_type) <= 0xFF:
+            raise ValueError("glass_type must fit in an unsigned byte")
+        group = cls.declare(
+            name,
+            children=children,
+            child_groups=child_groups,
+            flags=flags,
+            glass_pane_index=0 if pane_index is None else pane_index,
+            strength=strength,
+            total_undamaged_mass=total_undamaged_mass,
+            total_damaged_mass=total_damaged_mass,
+            debug_name=debug_name,
+        )
+        return dataclasses.replace(group, authored_glass_type=int(glass_type))
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class YftPhysicsEntity:
+    pointer: int = 0
+    label: str = ""
+    drawable: Ydr | YdrBuild | None = dataclasses.field(
+        default=None, repr=False, compare=False
+    )
+
+    @property
+    def has_drawable(self) -> bool:
+        return self.drawable is not None
+
+    @classmethod
+    def declare(
+        cls, drawable: Ydr | YdrBuild | None = None, *, label: str = ""
+    ) -> YftPhysicsEntity:
+        return cls(label=str(label), drawable=drawable)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class YftPhysicsInertia:
+    x: float = 0.0
+    y: float = 0.0
+    z: float = 0.0
+    mass: float = 0.0
+
+    def as_tuple(self) -> tuple[float, float, float, float]:
+        return (self.x, self.y, self.z, self.mass)
+
+    @property
+    def is_unavailable(self) -> bool:
+        return all(math.isnan(value) for value in self.as_tuple())
+
+    @classmethod
+    def unavailable(cls) -> YftPhysicsInertia:
+        return cls(*(float("nan"),) * 4)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class YftPhysicsDamping:
+    index: int = 0
+    x: float = 0.0
+    y: float = 0.0
+    z: float = 0.0
+
+    def as_tuple(self) -> tuple[float, float, float]:
+        return (self.x, self.y, self.z)
+
+    @property
+    def kind(self) -> YftPhysicsDampingKind:
+        return YftPhysicsDampingKind(self.index)
+
+    @classmethod
+    def declare(
+        cls,
+        kind: YftPhysicsDampingKind | int,
+        value: Vector3,
+    ) -> YftPhysicsDamping:
+        if not isinstance(value, Vector3):
+            raise TypeError("YftPhysicsDamping value must be a Vector3")
+        return cls(index=int(kind), x=value.x, y=value.y, z=value.z)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class YftPhysicsDampArchetype:
+    pointer: int = 0
+    vft: int = FRAG_PHYS_ARCHETYPE_DAMP_VFT
+    resource_state: int = RESOURCE_STATE
+    resource_type: int = 0
+    filename: str = ""
+    filename_pointer: int = 0
+    bound_pointer: int = 0
+    type_flags: int = 0
+    include_flags: int = 0
+    property_flags: int = 0
+    ref_count: int = 1
+    mass: float = 0.0
+    inv_mass: float = 0.0
+    gravity_factor: float = 0.0
+    max_speed: float = 0.0
+    max_ang_speed: float = 0.0
+    buoyancy_factor: float = 0.0
+    angular_inertia: Vector3 = Vector3()
+    inv_angular_inertia: Vector3 = Vector3()
+    damping_constants: tuple[YftPhysicsDamping, ...] = ()
+    damping_offset: int = 0
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.angular_inertia, Vector3):
+            raise TypeError("angular_inertia must be a Vector3")
+        if not isinstance(self.inv_angular_inertia, Vector3):
+            raise TypeError("inv_angular_inertia must be a Vector3")
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class YftArticulatedBodyType:
+    pointer: int = 0
+    vft: int = 0
+    resource_state: int = RESOURCE_STATE
+    joint_parent_indices: tuple[int, ...] = ()
+    replace_upon_reresource: float = 0.0
+    angular_decay_rate: float = 0.0
+    joint_type_pointers: tuple[int, ...] = ()
+    joints: tuple[YftPhysicsJoint1Dof | YftPhysicsJoint3Dof, ...] = ()
+    resourced_ang_inertia: tuple[YftPhysicsInertia, ...] = ()
+    num_links: int = 0
+    num_joints: int = 0
+    joint_types: tuple[YftPhysicsJointType | int, ...] = ()
+    locally_owned: bool = False
+    child_link_indices: tuple[int, ...] = dataclasses.field(
+        default=(), repr=False, compare=False
+    )
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class YftPhysicsReference:
+    pointer: int = 0
+    label: str = ""
+
+    @property
+    def exists(self) -> bool:
+        return self.pointer != 0
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class YftPhysicsTransforms:
+    matrices: tuple[Matrix4, ...] = ()
+    vft: int = FRAG_PHYS_TRANSFORMS_VFT
+    resource_state: int = RESOURCE_STATE
+    reserved_08: int = 0
+    reserved_14: int = 0
+    reserved_18: int = 0
+
+    @property
+    def count(self) -> int:
+        return len(self.matrices)
+
+    @classmethod
+    def declare(cls, matrices: Sequence[Matrix4] = ()) -> YftPhysicsTransforms:
+        return cls(matrices=tuple(matrices))
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class YftPhysicsChild:
+    pointer: int = 0
+    vft: int = FRAG_TYPE_CHILD_VFT
+    resource_state: int = RESOURCE_STATE
+    undamaged_mass: float = 0.0
+    damaged_mass: float | None = None
+    owner_group_pointer_index: int = 0
+    flags: int = 0
+    bone_id: int = 0
+    bone_controlled: bool | None = None
+    undamaged_entity_pointer: int = 0
+    damaged_entity_pointer: int = 0
+    owner_group_name: str = ""
+    min_breaking_impulse: float = 0.0
+    undamaged_ang_inertia: YftPhysicsInertia = dataclasses.field(
+        default_factory=YftPhysicsInertia
+    )
+    damaged_ang_inertia: YftPhysicsInertia | None = None
+    undamaged_entity: YftPhysicsEntity | None = dataclasses.field(
+        default=None, repr=False, compare=False
+    )
+    damaged_entity: YftPhysicsEntity | None = dataclasses.field(
+        default=None, repr=False, compare=False
+    )
+    events: YftPhysicsChildEvents = dataclasses.field(
+        default_factory=YftPhysicsChildEvents
+    )
+
+    @property
+    def uses_bone(self) -> bool:
+        if self.bone_controlled is not None:
+            return self.bone_controlled
+        return self.bone_id != 0
+
+    @property
+    def follows_root(self) -> bool:
+        return self.bone_id == 0
+
+    @property
+    def has_damage_state(self) -> bool:
+        return self.damaged_entity_pointer != 0 or self.damaged_entity is not None
+
+    @property
+    def uses_shared_entity(self) -> bool:
+        return (
+            self.undamaged_entity_pointer != 0
+            and self.undamaged_entity_pointer == self.damaged_entity_pointer
+        ) or (
+            self.undamaged_entity is not None
+            and self.undamaged_entity is self.damaged_entity
+        )
+
+    @property
+    def has_undamaged_entity(self) -> bool:
+        return self.undamaged_entity_pointer != 0
+
+    @property
+    def has_damaged_entity(self) -> bool:
+        return self.damaged_entity_pointer != 0
+
+    def entities(self) -> tuple[YftPhysicsEntity, ...]:
+        return tuple(
+            entity
+            for entity in (self.undamaged_entity, self.damaged_entity)
+            if entity is not None
+        )
+
+    @property
+    def undamaged_bound(self) -> Bound | None:
+        if self.undamaged_entity is None or self.undamaged_entity.drawable is None:
+            return None
+        return self.undamaged_entity.drawable.bound
+
+    @property
+    def damaged_bound(self) -> Bound | None:
+        if self.damaged_entity is None or self.damaged_entity.drawable is None:
+            return None
+        return self.damaged_entity.drawable.bound
+
+    @classmethod
+    def declare(
+        cls,
+        *,
+        undamaged_entity: YftPhysicsEntity | None = None,
+        damaged_entity: YftPhysicsEntity | None = None,
+        bone_id: int = 0,
+        bone_controlled: bool | None = None,
+        undamaged_mass: float = 0.0,
+        damaged_mass: float | None = None,
+        owner_group_name: str = "",
+        min_breaking_impulse: float = 0.0,
+        reserved_flags: int = 0,
+    ) -> YftPhysicsChild:
+        return cls(
+            undamaged_mass=float(undamaged_mass),
+            damaged_mass=(float(damaged_mass) if damaged_mass is not None else None),
+            flags=int(reserved_flags),
+            bone_id=int(bone_id),
+            bone_controlled=bone_controlled,
+            owner_group_name=str(owner_group_name),
+            min_breaking_impulse=float(min_breaking_impulse),
+            undamaged_entity=undamaged_entity,
+            damaged_entity=damaged_entity,
+        )
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class YftPhysicsLod:
+    label: str
+    pointer: int = 0
+    vft: int = FRAG_PHYSICS_LOD_VFT
+    resource_state: int = RESOURCE_STATE
+    smallest_ang_inertia: float = 0.0
+    largest_ang_inertia: float = 0.0
+    min_move_force: float = 0.0
+    body_type_pointer: int = 0
+    min_breaking_impulses_pointer: int = 0
+    root_cg_offset: Vector3 = Vector3()
+    original_root_cg_offset: Vector3 = Vector3()
+    unbroken_cg_offset: Vector3 = Vector3()
+    group_names_pointer: int = 0
+    groups_pointer: int = 0
+    children_pointer: int = 0
+    phys_damp_undamaged_pointer: int = 0
+    phys_damp_damaged_pointer: int = 0
+    composite_bounds_pointer: int = 0
+    undamaged_ang_inertia_pointer: int = 0
+    damaged_ang_inertia_pointer: int = 0
+    link_attachments_pointer: int = 0
+    self_collision_a_pointer: int = 0
+    self_collision_b_pointer: int = 0
+    num_self_collisions: int = 0
+    max_num_self_collisions: int = 0
+    num_groups: int = 0
+    root_group_count: int = 0
+    num_root_damage_regions: int = 0
+    num_bony_children: int = 0
+    num_children: int = 0
+    group_names: tuple[str, ...] = ()
+    group_pointers: tuple[int, ...] = ()
+    child_pointers: tuple[int, ...] = ()
+    groups: tuple[YftPhysicsGroup, ...] = ()
+    children: tuple[YftPhysicsChild, ...] = ()
+    damping_constants: tuple[YftPhysicsDamping, ...] = ()
+    min_breaking_impulses: tuple[float, ...] = ()
+    undamaged_ang_inertia: tuple[YftPhysicsInertia, ...] = ()
+    damaged_ang_inertia: tuple[YftPhysicsInertia, ...] = ()
+    link_attachments: YftPhysicsTransforms = dataclasses.field(
+        default_factory=YftPhysicsTransforms
+    )
+    body_type: YftPhysicsReference = dataclasses.field(
+        default_factory=YftPhysicsReference
+    )
+    phys_damp_undamaged: YftPhysicsReference = dataclasses.field(
+        default_factory=YftPhysicsReference
+    )
+    phys_damp_damaged: YftPhysicsReference = dataclasses.field(
+        default_factory=YftPhysicsReference
+    )
+    articulated_body_type: YftArticulatedBodyType | None = dataclasses.field(
+        default=None, repr=False, compare=False
+    )
+    undamaged_damp_archetype: YftPhysicsDampArchetype | None = dataclasses.field(
+        default=None, repr=False, compare=False
+    )
+    damaged_damp_archetype: YftPhysicsDampArchetype | None = dataclasses.field(
+        default=None, repr=False, compare=False
+    )
+    self_collision_pairs: tuple[tuple[int, int], ...] = ()
+    composite_bound: Bound | None = dataclasses.field(
+        default=None, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        for name in (
+            "root_cg_offset",
+            "original_root_cg_offset",
+            "unbroken_cg_offset",
+        ):
+            if not isinstance(getattr(self, name), Vector3):
+                raise TypeError(f"YftPhysicsLod.{name} must be a Vector3")
+
+    @property
+    def has_children(self) -> bool:
+        return self.num_children > 0
+
+    @property
+    def child_entity_pointers(self) -> tuple[int, ...]:
+        pointers = {
+            pointer
+            for child in self.children
+            for pointer in (
+                child.undamaged_entity_pointer,
+                child.damaged_entity_pointer,
+            )
+            if pointer
+        }
+        return tuple(sorted(pointers))
+
+    @property
+    def root_groups(self) -> tuple[YftPhysicsGroup, ...]:
+        return tuple(group for group in self.groups if group.is_root_group)
+
+    def group(self, key: int | str) -> YftPhysicsGroup | None:
+        if isinstance(key, int):
+            return self.groups[key] if 0 <= key < len(self.groups) else None
+        lowered = key.lower()
+        return next(
+            (
+                group
+                for group in self.groups
+                if group.name.lower() == lowered or group.debug_name.lower() == lowered
+            ),
+            None,
+        )
+
+    def children_for_group(
+        self, key: int | str | YftPhysicsGroup
+    ) -> tuple[YftPhysicsChild, ...]:
+        group = key if isinstance(key, YftPhysicsGroup) else self.group(key)
+        return group.children if group is not None else ()
+
+    def child(self, key: int | str) -> YftPhysicsChild | None:
+        if isinstance(key, int):
+            return self.children[key] if 0 <= key < len(self.children) else None
+        lowered = key.lower()
+        return next(
+            (
+                child
+                for child in self.children
+                if child.owner_group_name.lower() == lowered
+            ),
+            None,
+        )
+
+    def children_for_bone(self, bone_id: int) -> tuple[YftPhysicsChild, ...]:
+        return tuple(child for child in self.children if child.bone_id == int(bone_id))
+
+    @property
+    def damageable_groups(self) -> tuple[YftPhysicsGroup, ...]:
+        return tuple(group for group in self.groups if group.is_damageable)
+
+    @property
+    def total_undamaged_mass(self) -> float:
+        return sum(child.undamaged_mass for child in self.children)
+
+    @property
+    def total_damaged_mass(self) -> float:
+        return sum(
+            child.damaged_mass
+            for child in self.children
+            if child.damaged_mass is not None
+        )
+
+    @property
+    def is_all_glass(self) -> bool:
+        return bool(self.groups) and all(group.is_glass for group in self.groups)
+
+    def archetype(self, *, damaged: bool = False) -> YftPhysicsDampArchetype | None:
+        return self.damaged_damp_archetype if damaged else self.undamaged_damp_archetype
+
+    @property
+    def self_collision_group_pairs(
+        self,
+    ) -> tuple[tuple[YftPhysicsGroup, YftPhysicsGroup], ...]:
+        return tuple(
+            (self.groups[first], self.groups[second])
+            for first, second in self.self_collision_pairs
+            if first < len(self.groups) and second < len(self.groups)
+        )
+
+    @property
+    def event_references(
+        self,
+    ) -> dict[str, tuple[tuple[str, object], ...]]:
+        refs: dict[str, tuple[tuple[str, object], ...]] = {}
+        for index, child in enumerate(self.children):
+            items = child.events.items()
+            if items:
+                refs[f"child_{index}"] = items
+        for index, group in enumerate(self.groups):
+            if group.events.has_any:
+                refs[f"group_{index}"] = (
+                    ("death_event", group.events.death),
+                    ("death_player", group.events.death_player_pointer),
+                )
+        return refs
+
+    @property
+    def glass_groups(self) -> tuple[YftPhysicsGroup, ...]:
+        return tuple(
+            group for group in self.groups if group.is_glass or group.is_legacy_glass
+        )
+
+    @property
+    def cloth_groups(self) -> tuple[YftPhysicsGroup, ...]:
+        return tuple(group for group in self.groups if group.has_cloth)
+
+    @property
+    def vehicle_passive_groups(self) -> tuple[YftPhysicsGroup, ...]:
+        return tuple(group for group in self.groups if not group.affects_vehicles)
+
+    @classmethod
+    def declare(
+        cls,
+        label: str = "high",
+        *,
+        groups: Sequence[YftPhysicsGroup] = (),
+        children: Sequence[YftPhysicsChild] = (),
+        damping_constants: Sequence[YftPhysicsDamping] = (),
+        root_cg_offset: Vector3 = Vector3(),
+        num_bony_children: int | None = None,
+    ) -> YftPhysicsLod:
+        if not isinstance(root_cg_offset, Vector3):
+            raise TypeError("root_cg_offset must be a Vector3")
+        declared_groups = tuple(groups)
+        group_names = tuple(group.name or group.debug_name for group in declared_groups)
+        resolved_groups: list[YftPhysicsGroup] = []
+        declared_children: list[YftPhysicsChild] = []
+        child_cursor = 0
+        for index, group in enumerate(declared_groups):
+            group_name = group.name or group.debug_name
+            group_children = tuple(
+                dataclasses.replace(
+                    child,
+                    owner_group_pointer_index=index,
+                    owner_group_name=group_name,
+                )
+                for child in group.children
+            )
+            resolved_groups.append(
+                dataclasses.replace(
+                    group,
+                    child_index=child_cursor if group_children else 0xFF,
+                    num_children=len(group_children),
+                    children=group_children,
+                )
+            )
+            child_cursor += len(group_children)
+            declared_children.extend(group_children)
+        if children:
+            declared_children = list(children)
+            if not resolved_groups:
+                resolved_groups = [
+                    YftPhysicsGroup.declare(
+                        "default",
+                        children=declared_children,
+                    )
+                ]
+                group_names = ("default",)
+        inferred_bony_children = max(
+            (
+                index + 1
+                for index, child in enumerate(declared_children)
+                if child.uses_bone
+            ),
+            default=0,
+        )
+        bony_children = (
+            inferred_bony_children
+            if num_bony_children is None
+            else int(num_bony_children)
+        )
+        if not 0 <= bony_children <= len(declared_children):
+            raise ValueError(
+                "num_bony_children must be between zero and the child count"
+            )
+        return cls(
+            label=str(label),
+            root_cg_offset=root_cg_offset,
+            original_root_cg_offset=root_cg_offset,
+            unbroken_cg_offset=root_cg_offset,
+            num_groups=len(resolved_groups),
+            root_group_count=sum(1 for group in resolved_groups if group.is_root_group),
+            num_bony_children=bony_children,
+            num_children=len(declared_children),
+            group_names=group_names,
+            groups=tuple(resolved_groups),
+            children=tuple(declared_children),
+            damping_constants=tuple(damping_constants),
+            min_breaking_impulses=tuple(
+                child.min_breaking_impulse for child in declared_children
+            ),
+            undamaged_ang_inertia=tuple(
+                child.undamaged_ang_inertia for child in declared_children
+            ),
+            damaged_ang_inertia=(
+                tuple(
+                    child.damaged_ang_inertia
+                    for child in declared_children
+                    if child.damaged_ang_inertia is not None
+                )
+                if all(
+                    child.damaged_ang_inertia is not None for child in declared_children
+                )
+                else ()
+            ),
+        )
+
+    def with_group(self, group: YftPhysicsGroup) -> YftPhysicsLod:
+        return type(self).declare(
+            self.label,
+            groups=(*self.groups, group),
+            damping_constants=self.damping_constants,
+            root_cg_offset=self.root_cg_offset,
+        )
+
+    def with_child(
+        self, child: YftPhysicsChild, *, group: int | str = 0
+    ) -> YftPhysicsLod:
+        groups = list(self.groups)
+        if not groups:
+            groups.append(
+                YftPhysicsGroup.declare(
+                    str(group) if isinstance(group, str) else "default"
+                )
+            )
+        group_index = (
+            group
+            if isinstance(group, int)
+            else next(
+                (
+                    index
+                    for index, item in enumerate(groups)
+                    if item.name == group or item.debug_name == group
+                ),
+                0,
+            )
+        )
+        groups[group_index] = dataclasses.replace(
+            groups[group_index],
+            children=(*groups[group_index].children, child),
+        )
+        return type(self).declare(
+            self.label,
+            groups=groups,
+            damping_constants=self.damping_constants,
+            root_cg_offset=self.root_cg_offset,
+        )
+
+    def calculate_mass_properties(
+        self,
+        *,
+        density: float | None = None,
+        force: bool = False,
+        profile: YftPhysicsBoundProfile | str = "prop",
+    ) -> YftPhysicsLod:
+        from .physics_authoring import normalize_physics_lod
+
+        return normalize_physics_lod(
+            self,
+            composite_bound=self.composite_bound,
+            density=density,
+            profile=profile,
+            recalculate_mass_properties=force,
+        )
+
+
+__all__ = [
+    "YftArticulatedBodyType",
+    "YftPhysicsChild",
+    "YftPhysicsDampArchetype",
+    "YftPhysicsDamping",
+    "YftPhysicsDampingKind",
+    "YftPhysicsEntity",
+    "YftPhysicsGroup",
+    "YftPhysicsGroupFlag",
+    "YftPhysicsInertia",
+    "YftPhysicsJoint",
+    "YftPhysicsJoint1Dof",
+    "YftPhysicsJoint3Dof",
+    "YftPhysicsJointType",
+    "YftPhysicsLod",
+    "YftPhysicsLodPointers",
+    "YftPhysicsReference",
+    "YftPhysicsTransforms",
+]

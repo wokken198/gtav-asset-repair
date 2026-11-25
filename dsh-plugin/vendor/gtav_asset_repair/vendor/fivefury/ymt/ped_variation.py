@@ -1,0 +1,327 @@
+from __future__ import annotations
+
+import enum
+from collections.abc import Iterator, MutableMapping
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
+from ..pso import PsoNode
+
+if TYPE_CHECKING:
+    from . import Ymt
+
+
+class PedComponent(enum.IntEnum):
+    HEAD = 0
+    BEARD = 1
+    HAIR = 2
+    UPPER = 3
+    LOWER = 4
+    HAND = 5
+    FEET = 6
+    TEETH = 7
+    ACCESSORIES = 8
+    TASK = 9
+    DECL = 10
+    JBIB = 11
+
+
+class PedPropAnchor(enum.IntEnum):
+    HEAD = 0
+    EYES = 1
+    EARS = 2
+    MOUTH = 3
+    LEFT_HAND = 4
+    RIGHT_HAND = 5
+    LEFT_WRIST = 6
+    RIGHT_WRIST = 7
+    HIP = 8
+    LEFT_FOOT = 9
+    RIGHT_FOOT = 10
+    PHYSICS_LEFT_HAND = 11
+    PHYSICS_RIGHT_HAND = 12
+
+
+_COMPONENT_ALIASES = {
+    "head": PedComponent.HEAD,
+    "berd": PedComponent.BEARD,
+    "beard": PedComponent.BEARD,
+    "hair": PedComponent.HAIR,
+    "uppr": PedComponent.UPPER,
+    "upper": PedComponent.UPPER,
+    "lowr": PedComponent.LOWER,
+    "lower": PedComponent.LOWER,
+    "hand": PedComponent.HAND,
+    "hands": PedComponent.HAND,
+    "feet": PedComponent.FEET,
+    "teef": PedComponent.TEETH,
+    "teeth": PedComponent.TEETH,
+    "accs": PedComponent.ACCESSORIES,
+    "accessory": PedComponent.ACCESSORIES,
+    "accessories": PedComponent.ACCESSORIES,
+    "task": PedComponent.TASK,
+    "decl": PedComponent.DECL,
+    "jbib": PedComponent.JBIB,
+}
+
+_COMPONENT_FILE_STEMS = {
+    PedComponent.HEAD: "head",
+    PedComponent.BEARD: "berd",
+    PedComponent.HAIR: "hair",
+    PedComponent.UPPER: "uppr",
+    PedComponent.LOWER: "lowr",
+    PedComponent.HAND: "hand",
+    PedComponent.FEET: "feet",
+    PedComponent.TEETH: "teef",
+    PedComponent.ACCESSORIES: "accs",
+    PedComponent.TASK: "task",
+    PedComponent.DECL: "decl",
+    PedComponent.JBIB: "jbib",
+}
+
+_PROP_FILE_STEMS = {
+    PedPropAnchor.HEAD: "p_head",
+    PedPropAnchor.EYES: "p_eyes",
+    PedPropAnchor.EARS: "p_ears",
+    PedPropAnchor.MOUTH: "p_mouth",
+    PedPropAnchor.LEFT_HAND: "p_lhand",
+    PedPropAnchor.RIGHT_HAND: "p_rhand",
+    PedPropAnchor.LEFT_WRIST: "p_lwrist",
+    PedPropAnchor.RIGHT_WRIST: "p_rwrist",
+    PedPropAnchor.HIP: "p_lhip",
+    PedPropAnchor.LEFT_FOOT: "p_lfoot",
+    PedPropAnchor.RIGHT_FOOT: "p_rfoot",
+    PedPropAnchor.PHYSICS_LEFT_HAND: "ph_lhand",
+    PedPropAnchor.PHYSICS_RIGHT_HAND: "ph_rhand",
+}
+
+_ROOT_COMPONENTS = ("aComponentData3", "0xE2489C4F")
+_ROOT_AVAILABLE = ("availComp", "0xB29BE228")
+_COMPONENT_DRAWABLES = ("aDrawblData3", "0x68AC8351")
+_DRAWABLE_TEXTURES = ("aTexData", "0x4A92222A")
+_DRAWABLE_CLOTH = ("clothData", "0x92E68DB3")
+_CLOTH_OWNS = ("ownsCloth", "0xA893A361")
+_PROP_MASK = ("propMask", "0xAECFE243")
+_NUM_ALTERNATIVES = ("numAlternatives", "0xA7431FBA")
+_ROOT_PROP_INFO = ("propInfo", "0x8590CDD8")
+_PROP_ANCHORS = ("aAnchors", "0x09AD30FA")
+_ANCHOR_PROPS = ("props", "0x8856F65A")
+_ANCHOR_ID = ("anchor", "0x7019CA89")
+
+
+@dataclass(slots=True, frozen=True)
+class PedDrawableVariation:
+    component: PedComponent
+    drawable_index: int
+    texture_count: int
+    prop_mask: int = 0
+    num_alternatives: int = 0
+    owns_cloth: bool = False
+
+    @property
+    def file_stem(self) -> str:
+        suffix = "u"
+        prop_type = (int(self.prop_mask) >> 4) & 3
+        if prop_type == 1:
+            suffix = "r"
+        elif prop_type in {2, 3}:
+            suffix = "m"
+        return f"{_COMPONENT_FILE_STEMS[self.component]}_{self.drawable_index:03d}_{suffix}"
+
+
+@dataclass(slots=True, frozen=True)
+class PedPropVariation:
+    anchor: PedPropAnchor
+    drawable_index: int
+    texture_count: int
+
+    @property
+    def slot(self) -> int:
+        return 12 + int(self.anchor)
+
+    @property
+    def file_stem(self) -> str:
+        return ped_prop_file_stem(self.anchor, self.drawable_index)
+
+
+def coerce_ped_component(value: PedComponent | str | int) -> PedComponent:
+    if isinstance(value, PedComponent):
+        return value
+    if isinstance(value, str):
+        key = value.strip().lower()
+        if key in _COMPONENT_ALIASES:
+            return _COMPONENT_ALIASES[key]
+        if key.isdigit():
+            return PedComponent(int(key))
+        raise ValueError(f"Unknown ped component {value!r}")
+    return PedComponent(int(value))
+
+
+def coerce_ped_prop_anchor(value: PedPropAnchor | str | int) -> PedPropAnchor:
+    if isinstance(value, PedPropAnchor):
+        return value
+    if isinstance(value, str):
+        key = value.strip().lower()
+        for anchor, stem in _PROP_FILE_STEMS.items():
+            if key in {anchor.name.lower(), stem, stem.removeprefix("p_")}:
+                return anchor
+        if key.isdigit():
+            return PedPropAnchor(int(key))
+        raise ValueError(f"Unknown ped prop anchor {value!r}")
+    return PedPropAnchor(int(value))
+
+
+def iter_ped_drawables(ymt: Ymt) -> Iterator[PedDrawableVariation]:
+    root = _require_ped_root(ymt)
+    for component in PedComponent:
+        component_data = _component_data(root, component)
+        if component_data is None:
+            continue
+        drawables = _get(component_data, _COMPONENT_DRAWABLES, default=())
+        for drawable_index, drawable in enumerate(drawables):
+            textures = _get(drawable, _DRAWABLE_TEXTURES, default=())
+            cloth_data = _get(drawable, _DRAWABLE_CLOTH, default={})
+            yield PedDrawableVariation(
+                component=component,
+                drawable_index=drawable_index,
+                texture_count=len(textures),
+                prop_mask=int(_get(drawable, _PROP_MASK, default=0) or 0),
+                num_alternatives=int(_get(drawable, _NUM_ALTERNATIVES, default=0) or 0),
+                owns_cloth=bool(_get(cloth_data, _CLOTH_OWNS, default=False)),
+            )
+
+
+def iter_ped_props(ymt: Ymt) -> Iterator[PedPropVariation]:
+    root = _require_ped_root(ymt)
+    prop_info = _get(root, _ROOT_PROP_INFO, default=None)
+    if not _is_mutable_node(prop_info):
+        return
+    anchors = _get(prop_info, _PROP_ANCHORS, default=())
+    for anchor_data in anchors:
+        if not _is_mutable_node(anchor_data):
+            continue
+        try:
+            anchor = PedPropAnchor(int(_get(anchor_data, _ANCHOR_ID)))
+        except (TypeError, ValueError):
+            continue
+        texture_counts = _get(anchor_data, _ANCHOR_PROPS, default=())
+        for drawable_index, texture_count in enumerate(texture_counts):
+            yield PedPropVariation(
+                anchor=anchor,
+                drawable_index=drawable_index,
+                texture_count=int(texture_count),
+            )
+
+
+def set_ped_drawable_cloth(
+    ymt: Ymt,
+    component: PedComponent | str | int,
+    drawable: int = 0,
+    *,
+    owns: bool = True,
+) -> Ymt:
+    root = _require_ped_root(ymt)
+    component_enum = coerce_ped_component(component)
+    component_data = _component_data(root, component_enum)
+    if component_data is None:
+        raise ValueError(f"YMT does not define component {component_enum.name}")
+    drawables = _get(component_data, _COMPONENT_DRAWABLES, default=None)
+    if not isinstance(drawables, list):
+        raise TypeError(f"YMT component {component_enum.name} has no drawable list")
+    drawable_index = int(drawable)
+    if drawable_index < 0 or drawable_index >= len(drawables):
+        raise IndexError(f"Drawable {drawable_index} is outside component {component_enum.name}")
+    drawable_data = drawables[drawable_index]
+    cloth_data = _get(drawable_data, _DRAWABLE_CLOTH, default=None)
+    if not _is_mutable_node(cloth_data):
+        cloth_data = {}
+        _set(drawable_data, _DRAWABLE_CLOTH, cloth_data)
+    _set(cloth_data, _CLOTH_OWNS, bool(owns))
+    return ymt
+
+
+def ped_drawable_file_stem(component: PedComponent | str | int, drawable: int, prop_mask: int = 0) -> str:
+    variation = PedDrawableVariation(
+        component=coerce_ped_component(component),
+        drawable_index=int(drawable),
+        texture_count=0,
+        prop_mask=int(prop_mask),
+    )
+    return variation.file_stem
+
+
+def ped_prop_file_stem(
+    anchor: PedPropAnchor | str | int,
+    drawable: int,
+) -> str:
+    anchor_enum = coerce_ped_prop_anchor(anchor)
+    return f"{_PROP_FILE_STEMS[anchor_enum]}_{int(drawable):03d}"
+
+
+def _require_ped_root(ymt: Ymt) -> MutableMapping[str, Any] | PsoNode:
+    root = ymt.ped_variation if ymt.ped_variation is not None else ymt.root_value
+    if not _is_mutable_node(root):
+        raise TypeError("YMT root is not a decoded ped variation mapping or PSO node")
+    return root
+
+
+def _component_data(root: MutableMapping[str, Any] | PsoNode, component: PedComponent) -> MutableMapping[str, Any] | PsoNode | None:
+    available = tuple(_get(root, _ROOT_AVAILABLE, default=()))
+    if int(component) >= len(available):
+        return None
+    component_data_index = int(available[int(component)])
+    if component_data_index == 0xFF:
+        return None
+    components = _get(root, _ROOT_COMPONENTS, default=())
+    if component_data_index < 0 or component_data_index >= len(components):
+        return None
+    component_data = components[component_data_index]
+    return component_data if _is_mutable_node(component_data) else None
+
+
+def _get(mapping: Any, names: tuple[str, str], *, default: Any = None) -> Any:
+    fields = _fields(mapping)
+    if fields is None:
+        return default
+    for name in names:
+        if name in fields:
+            return fields[name]
+    return default
+
+
+def _set(mapping: MutableMapping[str, Any] | PsoNode, names: tuple[str, str], value: Any) -> None:
+    fields = _fields(mapping)
+    if fields is None:
+        raise TypeError("YMT ped variation value is not mutable")
+    for name in names:
+        if name in fields:
+            fields[name] = value
+            return
+    fields[names[0]] = value
+
+
+def _fields(mapping: Any) -> MutableMapping[str, Any] | None:
+    if isinstance(mapping, PsoNode):
+        return mapping.fields
+    if isinstance(mapping, MutableMapping):
+        return mapping
+    return None
+
+
+def _is_mutable_node(value: Any) -> bool:
+    return isinstance(value, (PsoNode, MutableMapping))
+
+
+__all__ = [
+    "PedComponent",
+    "PedDrawableVariation",
+    "PedPropAnchor",
+    "PedPropVariation",
+    "coerce_ped_component",
+    "coerce_ped_prop_anchor",
+    "iter_ped_drawables",
+    "iter_ped_props",
+    "ped_drawable_file_stem",
+    "ped_prop_file_stem",
+    "set_ped_drawable_cloth",
+]

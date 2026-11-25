@@ -1,0 +1,367 @@
+from __future__ import annotations
+
+import struct
+from collections.abc import Iterator
+from dataclasses import dataclass
+from itertools import pairwise
+
+from ..binary import align
+from .constants import AwcCodecType
+from .mp3 import (
+    MP3_SAMPLES_PER_FRAME,
+    MP3_STREAMING_PACKET_SIZE,
+    EncodedMp3Channel,
+    Mp3Frame,
+    parse_mp3_frames,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Mp3StreamingChannel:
+    packet_offsets: tuple[int, ...]
+    sample_count: int
+    frame_count: int
+    encoded_size: int
+    frames: tuple[Mp3Frame, ...]
+    samples_to_skip: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class Mp3StreamingBlock:
+    channels: tuple[Mp3StreamingChannel, ...]
+
+    @property
+    def first_packet_sample_offset(self) -> int:
+        return _first_packet_sample_offset(
+            tuple(channel.packet_offsets for channel in self.channels)
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Mp3StreamingData:
+    data: bytes
+    block_count: int
+    seek_table: tuple[int, ...]
+
+
+def _first_packet_sample_offset(
+    offsets_by_channel: tuple[tuple[int, ...], ...],
+) -> int:
+    if not offsets_by_channel or any(not offsets for offsets in offsets_by_channel):
+        raise ValueError("Every MP3 block channel must contain a packet offset")
+    value = max(offsets[0] for offsets in offsets_by_channel)
+    if value < 0 or value > 0xFFFFFFFF:
+        raise ValueError("MP3 block seek offset exceeds uint32")
+    return value
+
+
+def _iter_streaming_blocks(
+    data: bytes | bytearray | memoryview,
+    *,
+    block_count: int,
+    block_size: int,
+) -> Iterator[memoryview]:
+    source = memoryview(data).cast("B")
+    if block_count <= 0 or block_size <= 0 or block_size % MP3_STREAMING_PACKET_SIZE:
+        raise ValueError("AWC streaming block size must be a positive multiple of 2048")
+    minimum_size = (block_count - 1) * block_size + 1
+    if len(source) < minimum_size or len(source) > block_count * block_size:
+        raise ValueError("AWC streaming data does not match its block table")
+    for index in range(block_count):
+        yield source[index * block_size : (index + 1) * block_size]
+
+
+def _read_block_tables(
+    block: bytes | bytearray | memoryview,
+    channel_count: int,
+    *,
+    codec: AwcCodecType = AwcCodecType.MP3,
+) -> tuple[
+    list[tuple[int, int, int, int, int, int]],
+    list[tuple[int, ...]],
+    int,
+]:
+    if channel_count <= 0 or len(block) < channel_count * 24:
+        raise ValueError("AWC channel block header is truncated")
+    headers: list[tuple[int, int, int, int, int, int]] = []
+    for channel_index in range(channel_count):
+        header = struct.unpack_from("<6i", block, channel_index * 24)
+        legacy_fixed = (
+            codec in (AwcCodecType.PCM, AwcCodecType.ADPCM)
+            and header[0] >= 0
+            and header[4:] == (0, 0)
+        )
+        if (header[0] != -1 and not legacy_fixed) or any(
+            value < 0 for value in header[1:]
+        ):
+            raise ValueError("AWC channel block header is invalid")
+        headers.append(header)
+
+    cursor = channel_count * 24
+    offsets_by_channel: list[tuple[int, ...]] = []
+    for header in headers:
+        packet_count = header[1]
+        table_size = packet_count * 4
+        if cursor + table_size > len(block):
+            raise ValueError("AWC packet table is truncated")
+        offsets = (
+            struct.unpack_from(f"<{packet_count}i", block, cursor)
+            if packet_count
+            else ()
+        )
+        if any(value < 0 for value in offsets) or any(
+            right <= left for left, right in pairwise(offsets)
+        ):
+            raise ValueError("AWC packet offsets must be monotonic")
+        offsets_by_channel.append(tuple(offsets))
+        cursor += table_size
+    return headers, offsets_by_channel, align(cursor, MP3_STREAMING_PACKET_SIZE)
+
+
+def derive_mp3_streaming_seek_table(
+    data: bytes | bytearray | memoryview,
+    *,
+    block_count: int,
+    block_size: int,
+    channel_count: int,
+) -> tuple[int, ...]:
+    return tuple(
+        _first_packet_sample_offset(tuple(_read_block_tables(block, channel_count)[1]))
+        for block in _iter_streaming_blocks(
+            data,
+            block_count=block_count,
+            block_size=block_size,
+        )
+    )
+
+
+def _frame_prefix(channel: EncodedMp3Channel) -> tuple[int, ...]:
+    result = [0]
+    for size in channel.frame_sizes:
+        result.append(result[-1] + size)
+    return tuple(result)
+
+
+def _packet_offsets(sizes: tuple[int, ...], *, first_frame: int) -> tuple[int, ...]:
+    offsets: list[int] = []
+    packet_size = 0
+    for index, frame_size in enumerate(sizes):
+        if frame_size > MP3_STREAMING_PACKET_SIZE:
+            raise ValueError("MP3 frame exceeds the AWC streaming packet size")
+        if not offsets or packet_size + frame_size > MP3_STREAMING_PACKET_SIZE:
+            offsets.append((first_frame + index) * MP3_SAMPLES_PER_FRAME)
+            packet_size = 0
+        packet_size += frame_size
+    return tuple(offsets)
+
+
+def _block_size(
+    channels: tuple[EncodedMp3Channel, ...],
+    prefixes: tuple[tuple[int, ...], ...],
+    first_frame: int,
+    end_frame: int,
+) -> int:
+    packet_count = sum(
+        len(
+            _packet_offsets(
+                channel.frame_sizes[first_frame:end_frame], first_frame=first_frame
+            )
+        )
+        for channel in channels
+    )
+    header_size = align(
+        24 * len(channels) + 4 * packet_count,
+        MP3_STREAMING_PACKET_SIZE,
+    )
+    payload_size = sum(
+        align(prefix[end_frame] - prefix[first_frame], 16) for prefix in prefixes
+    )
+    return header_size + payload_size
+
+
+def _block_end(
+    channels: tuple[EncodedMp3Channel, ...],
+    prefixes: tuple[tuple[int, ...], ...],
+    first_frame: int,
+    frame_count: int,
+    block_size: int,
+) -> int:
+    low = first_frame + 1
+    high = frame_count
+    if _block_size(channels, prefixes, first_frame, low) > block_size:
+        raise ValueError("AWC block size cannot hold one MP3 frame per channel")
+    while low < high:
+        middle = (low + high + 1) // 2
+        if _block_size(channels, prefixes, first_frame, middle) <= block_size:
+            low = middle
+        else:
+            high = middle - 1
+    return low
+
+
+def build_mp3_streaming_data(
+    channels: tuple[EncodedMp3Channel, ...],
+    *,
+    block_size: int = 524_288,
+) -> Mp3StreamingData:
+    if not channels:
+        raise ValueError("MP3 streaming authoring requires at least one channel")
+    if block_size <= 0 or block_size % MP3_STREAMING_PACKET_SIZE:
+        raise ValueError("AWC MP3 block size must be a positive multiple of 2048")
+    sample_counts = {channel.sample_count for channel in channels}
+    sample_rates = {channel.sample_rate for channel in channels}
+    frame_counts = {channel.frame_count for channel in channels}
+    if len(sample_counts) != 1 or len(sample_rates) != 1 or len(frame_counts) != 1:
+        raise ValueError("AWC MP3 channels must have equal duration and frame count")
+    for channel in channels:
+        if sum(channel.frame_sizes) != len(channel.data):
+            raise ValueError("MP3 frame seek table does not cover its encoded channel")
+        if channel.seek_table_entry_size != 2 or any(
+            size <= 0 or size > 0xFFFF for size in channel.frame_sizes
+        ):
+            raise ValueError("MP3 frame sizes must fit the uint16 seek table")
+        parsed = parse_mp3_frames(
+            channel.data,
+            require_independent=True,
+            sample_rate=channel.sample_rate,
+        )
+        if tuple(frame.size for frame in parsed) != channel.frame_sizes:
+            raise ValueError("MP3 frame seek table does not match the encoded payload")
+
+    frame_count = frame_counts.pop()
+    sample_count = sample_counts.pop()
+    prefixes = tuple(_frame_prefix(channel) for channel in channels)
+    blocks: list[bytes] = []
+    seek_table: list[int] = []
+    first_frame = 0
+    while first_frame < frame_count:
+        end_frame = _block_end(
+            channels,
+            prefixes,
+            first_frame,
+            frame_count,
+            block_size,
+        )
+        payloads: list[bytes] = []
+        offsets_by_channel: list[tuple[int, ...]] = []
+        block = bytearray()
+        useful_samples = max(
+            0,
+            min(sample_count, end_frame * MP3_SAMPLES_PER_FRAME)
+            - min(sample_count, first_frame * MP3_SAMPLES_PER_FRAME),
+        )
+        for channel, prefix in zip(channels, prefixes, strict=True):
+            sizes = channel.frame_sizes[first_frame:end_frame]
+            offsets = _packet_offsets(sizes, first_frame=first_frame)
+            payload = channel.data[prefix[first_frame] : prefix[end_frame]]
+            offsets_by_channel.append(offsets)
+            payloads.append(payload)
+            block += struct.pack(
+                "<6i",
+                -1,
+                len(offsets),
+                0,
+                useful_samples,
+                len(sizes),
+                len(payload),
+            )
+        seek_table.append(_first_packet_sample_offset(tuple(offsets_by_channel)))
+        for offsets in offsets_by_channel:
+            block += struct.pack(f"<{len(offsets)}i", *offsets)
+        block += bytes(-len(block) % MP3_STREAMING_PACKET_SIZE)
+        for payload in payloads:
+            block += payload
+            block += bytes(-len(payload) % 16)
+        if len(block) > block_size:
+            raise RuntimeError("AWC MP3 block planner exceeded the selected block size")
+        # Retail AWC files pad every intermediate streaming block to block_size,
+        # but keep the final block compact.  Padding the tail to a complete
+        # 512 KiB block produces a structurally readable file that the GTA V
+        # Enhanced audio runtime may reject as a silent mastered stream.
+        if end_frame < frame_count:
+            block += bytes(block_size - len(block))
+        blocks.append(bytes(block))
+        first_frame = end_frame
+    return Mp3StreamingData(b"".join(blocks), len(blocks), tuple(seek_table))
+
+
+def inspect_mp3_streaming_data(
+    data: bytes | bytearray | memoryview,
+    *,
+    block_count: int,
+    block_size: int,
+    channel_count: int,
+    sample_rate: int,
+) -> tuple[Mp3StreamingBlock, ...]:
+    result: list[Mp3StreamingBlock] = []
+    sample_positions = [0] * channel_count
+    for block in _iter_streaming_blocks(
+        data,
+        block_count=block_count,
+        block_size=block_size,
+    ):
+        headers, offsets_by_channel, cursor = _read_block_tables(
+            block,
+            channel_count,
+        )
+        parsed_channels: list[Mp3StreamingChannel] = []
+        for channel_index, (header, packet_offsets) in enumerate(
+            zip(headers, offsets_by_channel, strict=True)
+        ):
+            encoded_size = header[5]
+            if cursor + encoded_size > len(block):
+                raise ValueError("AWC MP3 channel payload is truncated")
+            payload = block[cursor : cursor + encoded_size]
+            frames = parse_mp3_frames(
+                payload,
+                require_independent=True,
+                sample_rate=sample_rate,
+            )
+            # Retail trimming shortens the final packet without reducing NumFrames.
+            max_trimmed_frames = MP3_STREAMING_PACKET_SIZE // (
+                144_000 * 32 // sample_rate
+            )
+            if not len(frames) <= header[4] < len(frames) + max_trimmed_frames:
+                raise ValueError("AWC MP3 frame count does not match its payload")
+            if not 0 <= header[2] < header[3] <= len(frames) * MP3_SAMPLES_PER_FRAME:
+                raise ValueError(
+                    "AWC MP3 sample counts or skipped samples exceed decoded frame capacity"
+                )
+            if not packet_offsets or packet_offsets[0] % MP3_SAMPLES_PER_FRAME:
+                raise ValueError("AWC MP3 packet origin must identify a frame boundary")
+            if packet_offsets[0] + header[2] != sample_positions[channel_index]:
+                raise ValueError(
+                    "AWC MP3 blocks have a gap or overlapping output samples"
+                )
+            sample_positions[channel_index] += header[3] - header[2]
+            expected_offsets = _packet_offsets(
+                tuple(frame.size for frame in frames),
+                first_frame=(
+                    packet_offsets[0] // MP3_SAMPLES_PER_FRAME if packet_offsets else 0
+                ),
+            )
+            if expected_offsets != packet_offsets:
+                raise ValueError("AWC MP3 packet table does not match its frame layout")
+            parsed_channels.append(
+                Mp3StreamingChannel(
+                    packet_offsets,
+                    header[3],
+                    header[4],
+                    encoded_size,
+                    frames,
+                    header[2],
+                )
+            )
+            cursor += align(encoded_size, 16)
+        result.append(Mp3StreamingBlock(tuple(parsed_channels)))
+    return tuple(result)
+
+
+__all__ = [
+    "Mp3StreamingBlock",
+    "Mp3StreamingChannel",
+    "Mp3StreamingData",
+    "build_mp3_streaming_data",
+    "derive_mp3_streaming_seek_table",
+    "inspect_mp3_streaming_data",
+]
