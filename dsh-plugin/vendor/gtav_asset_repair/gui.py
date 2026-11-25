@@ -219,7 +219,7 @@ LANG = {
         "help.params": (
             "Strength - how steep the slopes get.\n"
             "vanilla: 0.7-2 deg median, 25-35 deg bevels\n"
-            "recommended (default): 4.5, a touch above vanilla\n"
+            "default: 2.0, close to vanilla\n"
             "\n"
             "Blur - smoothing before the slope is taken.\n"
             "vanilla badges: hardly any blur in the art\n"
@@ -388,7 +388,7 @@ LANG = {
         "help.params": (
             "强度 —— 坡度放大的倍数。\n"
             "原版车标：中位 0.7–2°，倒角 25–35°\n"
-            "推荐（本软件默认）：4.5，比原版略突出\n"
+            "默认 2.0，接近原版\n"
             "\n"
             "模糊 —— 算坡度之前的平滑。\n"
             "原版车标：素材本身几乎没有模糊\n"
@@ -1905,7 +1905,7 @@ class App(tk.Tk):
 
         cfg = self.cfg
         self.sl_strength = Slider(pbody, self, "strength", 0.5, 12.0, 0.1,
-                                  float(cfg.get("strength", 4.5)))
+                                  float(cfg.get("strength", 2.0)))
         self.sl_strength.pack(fill="x", pady=(0, 10))
         self.sl_blur = Slider(pbody, self, "blur", 0.0, 4.0, 0.1, float(cfg.get("blur", 1.2)))
         self.sl_blur.pack(fill="x", pady=(0, 10))
