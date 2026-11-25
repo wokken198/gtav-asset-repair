@@ -4,6 +4,16 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Car-badge normal maps now default to **strength 2.0** instead of 4.5, both in the
+  Normal maps page slider and in `tools/rebuild_badge_normals.py`. Measured on
+  `vehicles_ingame_gen8/sultan.ytd`: the old default produced 4.1× the vanilla
+  deviation from flat, 2.0 lands at 2.0×. Users who prefer a stronger emboss can
+  still raise the slider — the setting is remembered.
+
 ## [0.7.1] - 2026-11-25
 
 **CodeWalker is gone. Every page is pure Python.**

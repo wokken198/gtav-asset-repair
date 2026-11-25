@@ -11,7 +11,7 @@ from gtav_asset_repair import ytd_write, normals as N
 from PIL import Image
 
 TEXCONV = os.environ.get("TEXCONV", "texconv.exe")
-STRENGTH, BLUR = 4.5, 1.2
+STRENGTH, BLUR = 2.0, 1.2
 BASE = ""
 TEMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "_tmp_norm")
 y = ytd_write._y()
@@ -101,7 +101,7 @@ def main():
     ap.add_argument("--only", help="only files whose name contains this")
     ap.add_argument("--dry", action="store_true", help="work out the maps but write nothing")
     ap.add_argument("--texconv", default=TEXCONV)
-    ap.add_argument("--strength", type=float, default=4.5)
+    ap.add_argument("--strength", type=float, default=2.0)
     ap.add_argument("--blur", type=float, default=1.2)
     a = ap.parse_args()
     BASE, TEXCONV = a.folder, a.texconv
