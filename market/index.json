@@ -61,7 +61,7 @@
           "source": {
             "type": "git",
             "url": "https://github.com/wokken198/gtav-asset-repair",
-            "commit": "3d7cc2f53fbcd5688742da4522ef5dc593f61aed",
+            "commit": "57dd22dc6ec2b083e59513e8ca7b22a21ca904ba",
             "path": "dsh-plugin"
           },
           "engines": {}
