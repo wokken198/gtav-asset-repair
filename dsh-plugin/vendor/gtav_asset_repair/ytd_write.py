@@ -176,7 +176,11 @@ def _make_prepare(hint: dict[str, dict]):
             struct.pack_into("<II", vbuf, off + 0x10, known["dflags"], known["x14"])
             struct.pack_into("<HHH", vbuf, off + 0x18, texture.width, texture.height, 1)
             vbuf[off + 0x1E] = known["dim"]
-            vbuf[off + 0x1F] = known["fmt"]
+            # Prefer the format the texture actually holds now: replacing a BC3
+            # normal map with a BC1 one must also rewrite the format byte, or the
+            # archive claims BC3 while carrying BC1 blocks and the game reads garbage.
+            # Unknown formats still fall back to the archived value.
+            vbuf[off + 0x1F] = y._FORMAT_TO_RSC8.get(texture.format, known["fmt"])
             vbuf[off + 0x20] = known["tile"]
             vbuf[off + 0x21] = known["x21"]
             vbuf[off + 0x22] = texture.mip_count
@@ -436,8 +440,16 @@ def _verify(path: str, hint: dict) -> None:
         if actual is None:
             continue
         for key, value in expected.items():
-            if key in KEEP and actual.get(key) != value:
-                drifted.append("%s.%s %r -> %r" % (name, key, value, actual.get(key)))
+            if key not in KEEP:
+                continue
+            got = actual.get(key)
+            if got == value:
+                continue
+            if key == "fmt" and got in _y()._FORMAT_TO_RSC8.values():
+                # A deliberate format change (BC3 normal -> BC1) rewrites this byte
+                # along with the block layout; anything outside the known table is rot.
+                continue
+            drifted.append("%s.%s %r -> %r" % (name, key, value, got))
     if missing or drifted:
         detail = "; ".join((["%d texture(s) missing from the written archive" % len(missing)]
                             if missing else []) + drifted[:5])

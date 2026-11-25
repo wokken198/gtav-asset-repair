@@ -4,7 +4,68 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-11-25
+
+**CodeWalker is gone. Every page is pure Python.**
+
+Reading, compressing, MIP repair, ped work and RPF defragging now run on the
+vendored fivefury build plus a self-contained RPF7 reader. Nothing else has to
+be installed — no CodeWalker, no OpenIV, no .NET, no PowerShell.
+
+### Added
+
+- **Defrag (RPF)** page: rebuild an archive so the space freed by compression
+  actually reaches disk. The vendored `rpf7.py` parses and rewrites the RPF7
+  container directly (16-byte header, 16-byte entries, 512-byte blocks, raw
+  deflate payloads), so the page no longer shells out to a .NET helper.
+- A child archive is only rebuilt when **every entry inside it can be read**.
+  Archives whose children are encrypted are left untouched and the count is
+  reported, instead of being half-rewritten and broken.
+- `packaging/README-portable.txt` — the zip now ships a one-page manual next to
+  the exe.
+- `docs/fivefury-probe.md` and `docs/dsh-plugin-sync.md`.
+
+### Changed
+
+- `ytd list`, `lite`, `fix_mips`, `pack --original`, `ped check/fix/align` and
+  `rpf defrag` no longer spawn PowerShell or load CodeWalker.
+- `pack` now requires `--original`; without the source archive the texture
+  header fields can only be guessed, and guesses write archives the game rejects.
+- gen8 (legacy) YTD writes keep the source container flags and lay every texture
+  on a 4 KB boundary, which is what makes them load in game.
+- RPF entries that were stored uncompressed stay uncompressed: the game uses
+  `stored_size != 0` to decide whether to inflate, so re-compressing a plain
+  entry made the child archives unreadable.
+- The portable build drops from 85 MB to **73 MB** (including the zip: 34.3 MB).
+  The tcl time-zone database, the bundled OpenSSL and `_ssl`/`_hashlib` are
+  pruned in the spec, and nothing in the app or fivefury imports them.
+
+### Fixed
+
+- Badge normal maps wrote the green channel with the wrong sign, so a generated
+  emboss read as an engraved groove once it was in game. Checked against shipped
+  textures (`sentinel_badges_n`, `serrano_decals_bump`): `sign(G)` follows
+  `sign(-dy)` on 78-80% of the pixels that carry a slope, so
+  `normal_from_height()` now writes `-gy`. **Regenerate any normal map made
+  before this release** - the command and the parameters are unchanged.
+- The 41-vanilla ped baseline (`素材不要动/ped_ingame41_gen8` and `_gen9`) is
+  still 41/41 after the rewrite.
+- Language switching no longer throws `'PedPage' object has no attribute
+  'picked'` on a fresh window.
+- Clicking the middle of the language/theme switch did nothing when the switch
+  was already on the right; the hit area now splits into left / middle / right.
+- Large archives (> 1 GB) no longer hang forever: the defrag path runs in Python
+  and finishes a 3 GB archive in ~13 seconds.
+
+### Removed
+
+- `cw.py`, the five PowerShell helpers (`pack_ytd`, `ped_export`, `ymt_pack`,
+  `ytd_export`, `ytd_inspect`), the old Textures-page Repack button and its
+  handlers, and the four `ytd.repack*` strings.
+
 ## [0.7.0] - 2026-11-24
+
+
 
 **The project, the command and the window are now all called `gtav-asset-repair`.**
 

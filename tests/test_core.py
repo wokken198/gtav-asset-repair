@@ -85,6 +85,19 @@ class TestNormals(unittest.TestCase):
         n = normals.normal_from_height(normals.height_field(rgba, blur=0), strength=6.5)
         self.assertEqual(tuple(n[0, 0]), (128, 128, 255))
 
+    def test_green_points_up_in_texture_space(self):
+        """A ridge that rises towards the bottom of the image must encode G < 128.
+
+        Shipped badges follow this (sentinel_badges_n / serrano_decals_bump match
+        sign(-gy) on ~78% of pixels); the opposite sign renders the emboss as a
+        groove, which is the bug this locks down.
+        """
+        rise = np.tile(np.linspace(0.0, 1.0, 16, dtype=np.float32)[:, None], (1, 16))
+        n = normals.normal_from_height(rise, strength=4.0, flat_margin=False)
+        g = n[8, :, 1].astype(np.float32)
+        self.assertLess(float(g.mean()), 128.0, "G must fall as height rises downwards")
+        self.assertGreater(float(n[8, :, 2].astype(np.float32).mean()), 200.0)
+
     def test_height_prefers_bright_inside_mask(self):
         rgba = np.zeros((8, 8, 4), np.float32)
         rgba[..., 3] = 1.0

@@ -8,11 +8,9 @@ import os
 import subprocess
 import sys
 
-from . import cw, dds, lite, normals, ymt, ytd as ytdmod
+from . import dds, lite, normals, rpf, ymt, ytd as ytdmod
 
 DEFAULT_TEXCONV = os.environ.get("TEXCONV", "texconv.exe")
-DEFAULT_PS1 = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                           "resources", "pack_ytd.ps1")
 
 # Set by --work. Every default output path lives below it, so the whole run stays in one folder.
 WORK = ""
@@ -114,7 +112,11 @@ def cmd_audit(args) -> int:
     if not os.path.exists(args.file):
         print("no such file:", args.file, file=sys.stderr)
         return 1
-    result = ymt.audit_xml(args.file)
+    try:
+        result = ymt.audit_xml(args.file)
+    except Exception as exc:
+        print("err  %s: %s" % (os.path.basename(args.file), exc))
+        return 2
     payload = {
         "file": os.path.basename(args.file),
         "ok": result.ok,
@@ -155,7 +157,11 @@ def cmd_scale(args) -> int:
     for p, sub in jobs:
         try:
             h = dds.read_header(p)
-        except ValueError as exc:
+        except FileNotFoundError as exc:
+            print("err  %s: %s" % (os.path.basename(p), exc.strerror or exc))
+            failed += 1
+            continue
+        except (ValueError, OSError) as exc:
             print("skip:", exc)
             skipped += 1
             continue
@@ -202,25 +208,76 @@ def cmd_pack(args) -> int:
             stem = stem[:-4]
         args.out = work_path("packed", stem + ".ytd")
         ensure_dir(os.path.dirname(args.out))
-    core = cw.find_corewalker(args.core_dir, start=os.path.dirname(os.path.abspath(args.xml)))
-    if core is None:
-        print(cw.MISSING_HINT, file=sys.stderr)
-        return 2
-    print(f"codewalker: {core}")
-    cmd = ["powershell.exe", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", args.ps1,
-           "-Xml", os.path.abspath(args.xml), "-Build", os.path.abspath(args.build),
-           "-Out", os.path.abspath(args.out), "-CoreDir", core]
-    if args.legacy:
-        cmd += ["-Legacy"]
+
+    # --original selects the native writer: it re-reads the DDS payloads into the
+    # archive they came from, so every header field fivefury does not model (gen9
+    # VFT / image flags / render-target descriptors, legacy VFT / stride) is carried
+    # over by ytd_write instead of being rebuilt from a hard-coded profile.
     if args.original:
-        cmd += ["-Original", os.path.abspath(args.original)]
-    print(" ".join(cmd))
-    return subprocess.call(cmd)
+        if not os.path.exists(args.original):
+            print(f"no such --original path: {args.original}", file=sys.stderr)
+            return 1
+        try:
+            raw = open(args.original, "rb").read()
+            dictionary = ytdmod._load_reader()(args.original)
+            names = [entry.name for entry in lite.read_entries(args.xml)]
+            have = {texture.name for texture in dictionary.textures}
+            ignored = [name for name in names if name not in have]
+            out = lite.pack_native(dictionary, raw, os.path.abspath(args.build),
+                                   os.path.abspath(args.out), names)
+        except Exception as exc:
+            print(f"err {os.path.basename(args.out)}: {exc}", file=sys.stderr)
+            return 1
+        if ignored:
+            print("warn  %d texture(s) from the XML are not in --original and were skipped: %s"
+                  % (len(ignored), ", ".join(ignored[:3])), file=sys.stderr)
+        print(f"packed {out} ({os.path.getsize(out)} B, {len(names) - len(ignored)} texture(s))")
+        return 0
+
+    print("pack needs --original <the archive the XML came from>: the texture header fields "
+          "(VFT, descriptor flags, usage, G9 descriptors) only exist in the source archive, "
+          "and guessing them from constants writes archives the game may reject",
+          file=sys.stderr)
+    return 2
+
+
+def cmd_rpf_defrag(args) -> int:
+    targets: list[str] = []
+    for path in args.paths:
+        if os.path.isdir(path):
+            targets.extend(sorted(glob.glob(os.path.join(path, "**", "*.rpf"), recursive=True)))
+        elif path.lower().endswith(".rpf"):
+            targets.append(path)
+        else:
+            print("err  %s: not an .rpf" % path, file=sys.stderr)
+    if not targets:
+        print("no .rpf files given", file=sys.stderr)
+        return 2
+    ok = bad = 0
+    keep = getattr(args, "backup", False) and not args.output
+    for path in targets:
+        stem = os.path.basename(path)
+        try:
+            kept = rpf.backup(path) if keep else ""
+            if keep and not kept:
+                print("warn %s: larger than 500 MB, nothing was backed up; copy it yourself first" % stem)
+            report = rpf.defrag(path, out=args.output, dry_run=args.dry_run,
+                                 recursive=not args.no_recursive)
+        except Exception as exc:                             # noqa: BLE001
+            print("err  %s: %s" % (stem, str(exc)[:300]))
+            bad += 1
+            continue
+        print(("plan " if args.dry_run else "ok  ") + str(report))
+        if kept:
+            print("    backup %s" % os.path.basename(kept))
+        ok += 1
+    print("%d archive(s): %s, %d failed" % (len(targets), "dry run" if args.dry_run else "defragged", bad))
+    return 0 if bad == 0 else 1
 
 
 def cmd_ytd_list(args) -> int:
     try:
-        infos = ytdmod.inspect(args.files, core_dir=args.core_dir, ps1=args.ps1, legacy=args.legacy)
+        infos = ytdmod.inspect(args.files, core_dir=args.core_dir, legacy=args.legacy)
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -259,6 +316,9 @@ def cmd_mips_check(args) -> int:
     for p in dds_paths:
         try:
             h = dds.read_header(p)
+        except FileNotFoundError as exc:
+            print("err  %s: %s" % (os.path.basename(p), exc.strerror or exc))
+            continue
         except ValueError as exc:
             print("skip:", exc)
             continue
@@ -267,11 +327,14 @@ def cmd_mips_check(args) -> int:
 
     if ytd_paths:
         try:
-            infos = ytdmod.inspect(ytd_paths, core_dir=args.core_dir, ps1=args.ps1, legacy=args.legacy)
+            infos = ytdmod.inspect(ytd_paths, core_dir=args.core_dir, legacy=args.legacy)
         except RuntimeError as exc:
             print(str(exc), file=sys.stderr)
             return 2
         for info in infos:
+            if info.error:
+                print("err  %s: %s" % (os.path.basename(info.file), info.error))
+                continue
             for t in info.textures:
                 rows.append((os.path.basename(info.file), t.name, t.width, t.height, t.mips,
                              t.expected_mips, t.format))
@@ -318,10 +381,21 @@ def cmd_lite(args) -> int:
     for src in files:
         out = args.out if (args.out and not out_dir) else (
             os.path.join(out_dir, os.path.splitext(os.path.basename(src))[0] + "_lite.ytd") if out_dir else "")
+        if ytdmod._is_placeholder(src):
+            failed += 1
+            payload.append({"file": os.path.basename(src), "error": "placeholder archive"})
+            print("err %s: placeholder archive (%d bytes, no texture data); game files keep an empty "
+                  "+hi.ytd next to cars that only ship .yft / .ytd / _hi.yft"
+                  % (os.path.basename(src), os.path.getsize(src)))
+            continue
         try:
+            # size before the run: with --inplace `src` is overwritten by the
+            # time the call returns, so reading it afterwards reports the new
+            # size twice (measured: "6706754 B -> 6706754 B" for a 21 MB input).
+            before_size = os.path.getsize(src)
             written, report = lite.make_lite(src, out_path=out, mode=args.mode, cap=args.cap,
                                              core_dir=args.core_dir, texconv=args.texconv,
-                                             report_path=args.report, inplace=args.inplace)
+                                             inplace=args.inplace)
         except Exception as exc:  # noqa: BLE001 - report the file, keep the batch going
             failed += 1
             payload.append({"file": os.path.basename(src), "error": str(exc)})
@@ -331,7 +405,7 @@ def cmd_lite(args) -> int:
             payload.append({"file": os.path.basename(src), "skipped": report})
             print("skip %s: %s" % (os.path.basename(src), report))
             continue
-        before, after = os.path.getsize(src), os.path.getsize(written)
+        before, after = before_size, os.path.getsize(written)
         payload.append({"file": os.path.basename(src), "out": written, "before": before, "after": after,
                         "plan": report.splitlines()})
         print(report)
@@ -391,6 +465,11 @@ def cmd_mips_fix(args) -> int:
             out_path = single_out
         elif out_dir:
             out_path = os.path.join(out_dir, os.path.basename(path))
+        if ytdmod._is_placeholder(path):
+            failed += 1
+            print("err  %s: placeholder archive (%d bytes, no texture data); nothing to rebuild"
+                  % (os.path.basename(path), os.path.getsize(path)))
+            continue
         try:
             final, report = lite.fix_mips(path, out_path=out_path, core_dir=args.core_dir,
                                           texconv=args.texconv, inplace=args.inplace)
@@ -408,10 +487,9 @@ def cmd_mips_fix(args) -> int:
 
 def cmd_ped_check(args) -> int:
     from . import ped as pedmod
-    core = args.core_dir or cw.find_corewalker()
-    if not core:
-        print("err  CodeWalker not found; pass --core-dir", file=sys.stderr)
-        return 2
+    # `ped check` parses and audits the resources itself, so it works without
+    # CodeWalker; only `pack` and the legacy `--core-dir` diagnostics need it.
+    core = args.core_dir or ""
     targets = _ped_targets(args.paths)
     if not targets:
         print("err  no .ydd / .ymt pairs found", file=sys.stderr)
@@ -423,7 +501,7 @@ def cmd_ped_check(args) -> int:
         except Exception as exc:                          # noqa: BLE001
             bad += 1
             rows.append({"name": stem, "ok": False, "problems": [str(exc)]})
-            print("bad  %-30s %s" % (stem, str(exc)[:110]))
+            print("bad  %-30s %s" % (stem, str(exc)[:300]))
             continue
         if report.ok:
             rows.append({"name": stem, "ok": True, "problems": [], "notes": report.notes,
@@ -447,10 +525,8 @@ def cmd_ped_check(args) -> int:
 
 def cmd_ped_fix(args) -> int:
     from . import ped as pedmod
-    core = args.core_dir or cw.find_corewalker()
-    if not core:
-        print("err  CodeWalker not found; pass --core-dir", file=sys.stderr)
-        return 2
+    # Like `ped check`: no CodeWalker build required for the repair itself.
+    core = args.core_dir or ""
     targets = _ped_targets(args.paths)
     if not targets:
         print("err  no .ydd / .ymt pairs found", file=sys.stderr)
@@ -461,7 +537,7 @@ def cmd_ped_fix(args) -> int:
             report = pedmod.check_pair(stem, ydd, ymt, core)
         except Exception as exc:                          # noqa: BLE001
             failed += 1
-            print("bad  %-30s %s" % (stem, str(exc)[:110]))
+            print("bad  %-30s %s" % (stem, str(exc)[:300]))
             continue
         if report.ok:
             skipped += 1
@@ -481,7 +557,7 @@ def cmd_ped_fix(args) -> int:
             print("ok   %-30s %s: %d change(s), backup %s.bak" % (stem, action, len(changes), os.path.basename(ymt)))
         except Exception as exc:                          # noqa: BLE001
             failed += 1
-            print("bad  %-30s %s" % (stem, str(exc)[:110]))
+            print("bad  %-30s %s" % (stem, str(exc)[:300]))
     if not args.apply:
         print("\ndry run: %d pair(s) would change; add --apply to write (a .bak is kept)" % (len(targets) - skipped))
         return 0
@@ -535,7 +611,6 @@ def build_parser() -> argparse.ArgumentParser:
                    help="CodeWalker folder holding CodeWalker.Core.dll; auto-detected when omitted")
     k.add_argument("--legacy", action="store_true", help="write gen8 (version 165) instead of gen9")
     k.add_argument("--original", default="", help="copy G9/usage descriptors from this archive")
-    k.add_argument("--ps1", default=DEFAULT_PS1, help="the pack_ytd.ps1 bridge script")
     k.set_defaults(func=cmd_pack)
 
     y = sub.add_parser("ytd", parents=[common], help="inspect a texture dictionary (read-only)")
@@ -546,7 +621,6 @@ def build_parser() -> argparse.ArgumentParser:
     yl.add_argument("--json", nargs="?", const="-", default="", help=json_help)
     yl.add_argument("--legacy", action="store_true", help="parse as gen8 (165) instead of gen9 (159)")
     yl.add_argument("--core-dir", default="", help="CodeWalker folder; auto-detected when omitted")
-    yl.add_argument("--ps1", default=ytdmod.DEFAULT_PS1, help="the ytd_inspect.ps1 bridge script")
     yl.set_defaults(func=cmd_ytd_list)
 
     li = sub.add_parser("lite", parents=[common],
@@ -559,7 +633,6 @@ def build_parser() -> argparse.ArgumentParser:
     li.add_argument("--out", default="", help="output .ytd, or a folder when several inputs are given")
     li.add_argument("--inplace", action="store_true",
                     help="overwrite each input and keep the previous file as <name>.ytd.bak")
-    li.add_argument("--report", default="", help="write the per-texture plan here")
     li.add_argument("--core-dir", default="", help="CodeWalker folder; auto-detected when omitted")
     li.add_argument("--texconv", default=DEFAULT_TEXCONV, help="path to texconv.exe")
     li.add_argument("--json", nargs="?", const="-", default="", help=json_help)
@@ -573,7 +646,6 @@ def build_parser() -> argparse.ArgumentParser:
     mc.add_argument("--json", nargs="?", const="-", default="", help=json_help)
     mc.add_argument("--legacy", action="store_true", help="parse .ytd as gen8 (165)")
     mc.add_argument("--core-dir", default="", help="CodeWalker folder; auto-detected when omitted")
-    mc.add_argument("--ps1", default=ytdmod.DEFAULT_PS1, help="the ytd_inspect.ps1 bridge script")
     mc.set_defaults(func=cmd_mips_check)
 
     mf = msub.add_parser("fix", help="rebuild the dictionary with full mip chains (keeps a .bak with --inplace)")
@@ -598,6 +670,21 @@ def build_parser() -> argparse.ArgumentParser:
     pf.add_argument("--core-dir", default="", help="folder holding CodeWalker.Core.dll")
     pf.add_argument("--apply", action="store_true", help="actually write; otherwise only report the action")
     pf.set_defaults(func=cmd_ped_fix)
+
+    r_ = sub.add_parser("rpf", parents=[common],
+                        help="compact an .rpf container so freed space reaches disk (no CodeWalker)")
+    rsub = r_.add_subparsers(dest="rpf_cmd", required=True)
+    rd = rsub.add_parser("defrag", help="repack archives in place; keeps a .bak under 500 MB")
+    rd.add_argument("paths", nargs="+", help=".rpf files or folders")
+    rd.add_argument("--no-recursive", action="store_true",
+                    help="leave child .rpf archives alone")
+    rd.add_argument("--dry-run", action="store_true",
+                    help="report what the archive holds, write nothing")
+    rd.add_argument("--output", default="",
+                    help="write here instead of replacing the archive in place")
+    rd.add_argument("--backup", action="store_true",
+                    help="keep <name>.rpf.bak first (skipped above 500 MB)")
+    rd.set_defaults(func=cmd_rpf_defrag)
     return p
 
 

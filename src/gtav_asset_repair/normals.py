@@ -43,7 +43,12 @@ def height_field(rgba: np.ndarray, luma_weight: float = 0.7, mask_weight: float 
 
 def normal_from_height(h: np.ndarray, strength: float = 6.5, flat_margin: bool = True) -> np.ndarray:
     gy, gx = np.gradient(h)
-    nx, ny = -gx * strength, gy * strength
+    # G stored with +V pointing up in texture space: a surface that rises as we
+    # move down the image tilts away from the viewer, so G goes below 0.5.
+    # Verified against shipped badges (sentinel_badges_n, serrano_decals_bump):
+    # sign(normal.G) matches sign(-gy) on 78-80% of pixels, and rendering with
+    # -gy reproduces the vanilla emboss while +gy reads as an engraved groove.
+    nx, ny = -gx * strength, -gy * strength
     nz = np.ones_like(nx)
     ln = np.sqrt(nx * nx + ny * ny + nz * nz)
     out = np.dstack([nx / ln * 0.5 + 0.5, ny / ln * 0.5 + 0.5, nz / ln * 0.5 + 0.5]) * 255.0

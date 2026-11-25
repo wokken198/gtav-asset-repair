@@ -10,20 +10,27 @@ Desktop app, CLI, and a DeepSeek Harness bundle.
 ![the normal map page, light theme](docs/images/app-normals.png)
 
 **[Download the portable build](https://github.com/wokken198/gtav-asset-repair/releases/latest)** — unzip,
-run `gtav-asset-repair.exe`. No Python needed. `texconv.exe` is bundled; CodeWalker is only needed on the
-pages that read or write archives, and the app finds it or you point at its folder once.
+run `gtav-asset-repair.exe`. No Python needed. `texconv.exe` is bundled, and nothing else has to be
+installed: reading, compressing, MIP repair, ped repair and RPF defragging all run on the bundled readers.
 
 ## What it does
 
 | page | job | CodeWalker |
 |---|---|---|
 | **Normal maps (DDS)** | badge diffuse → tangent-space normal map, with strength / blur / alpha weight | not needed |
-| **Textures (YTD)** | shrink the textures inside a `.ytd`, keep a `.bak` | needed to write |
-| **Mip check (YTD/DDS)** | report short mip chains, then rebuild the archive with full ones | needed to write |
-| **Ped repair (YMT)** | check `.ymt` against its `.ydd`, correct the drift | needed for both |
+| **Textures (YTD)** | shrink the textures inside a `.ytd`, keep a `.bak` | not needed |
+| **Mip check (YTD/DDS)** | report short mip chains, then rebuild the archive with full ones | not needed |
+| **Ped repair (YMT)** | check `.ymt` against its `.ydd`, correct the drift | not needed |
+| **Defrag (RPF)** | rewrite an `.rpf` so its payload is contiguous again, reclaiming the space left by replaced files | not needed |
 
-`Analyze` and `mip check` read only the RSC7 header, so they work before CodeWalker is set up — that is
-why you can size up a pack in a second without touching a single file.
+Compression only frees memory; the archive on disk keeps its old size until it is defragged, which is what
+the **Defrag (RPF)** button and `rpf defrag` do: they read the archive, lay the payload out contiguously,
+and rewrite the directory. Child archives are rebuilt too, but only when every entry inside them can be
+read — a child that ships encrypted entries is left byte-for-byte alone, because moving it would break the
+game. The report says how many children were skipped for that reason.
+
+`Analyze` and `mip check` read only the RSC7 header, which is why you can size up a pack in a second
+without touching a single file.
 
 ![flat diffuse on the left, the same texture lit with a generated normal map on the right](docs/images/hero.png)
 
@@ -41,6 +48,11 @@ Real packs, before → after, every write leaving a `.bak` behind:
 
 Mip work goes the other way: a 4-file dictionary with 25 short chains went from `25 incomplete` to
 `0 incomplete` in one pass, and two add-on peds were repaired, re-read and verified.
+
+> **VRAM vs disk.** The VRAM numbers are yours the moment a file is rewritten. The *disk* numbers only
+> become real after the archive holding those files is repacked — an `.rpf` keeps the old bytes as empty
+> space until it is defragmented (OpenIV: defrag the inner `.rpf`, drop it back, then defrag the outer one).
+> Nothing here touches archives, on purpose.
 
 | Analyze — estimate only, nothing written | Compress — 9 written, 1 skipped |
 |---|---|
@@ -61,8 +73,6 @@ pip install -e .
 Python 3.9+, `numpy`, `Pillow`. Two optional bits, each needed only by the commands that use them:
 
 - **texconv.exe** (DirectXTex) — `normals`, `scale`; on `PATH`, next to the exe, or pass `--texconv`.
-- **CodeWalker.Core.dll** (dev48+) with Windows PowerShell — `pack`, `lite`, `mips fix`, `ped check|fix`;
-  found automatically, or pass `--core-dir` / set `GTA_TOOLS_CW`.
 
 ## Quick start
 
@@ -138,9 +148,10 @@ Parameter maths, texture-format traps and the ped field rules: [docs/pitfalls.md
 That does *not* mean a Legacy file becomes usable in the Enhanced edition — it stays Legacy, and you still
 convert it with CodeWalker. The app tells you when it spots one.
 
-Archives go through **CodeWalker.Core** (C#); the Python layer only orchestrates. That is why ped repair
-refuses to write when the local CodeWalker build shuffles `.ymt` components (some dev builds do — the tool
-says so instead of producing a broken file).
+Archives are read and written by a **vendored fivefury** build (Unlicense) plus a self-contained RPF7
+reader, so every page is pure Python and none of them need CodeWalker, OpenIV or .NET. The defrag page
+rebuilds an archive directly; a child archive is only rewritten when every entry inside it can be read,
+so archives that carry encrypted children are left alone rather than broken.
 
 ## Safety rules
 
@@ -154,7 +165,8 @@ says so instead of producing a broken file).
 
 ## Performance
 
-- Parsing a `.ytd` costs ~1.5 s via CodeWalker; a 40-archive scan is ~25 s, done in the background in the GUI.
+- Parsing a `.ytd` costs ~0.2 s in pure Python and four are read at once, so a 41-archive scan lands under a
+  second; the GUI still runs it on worker threads to stay responsive.
 - Shrinking is dominated by texture count and size: a 76-archive car pack takes a few minutes because every
   texture is decoded and re-encoded.
 - Two numbers are reported — **VRAM** (decoded footprint, what matters in game) and **file size** (what is
