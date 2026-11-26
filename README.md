@@ -7,9 +7,10 @@
 > <https://github.com/wokken198/gtav-asset-repair> would be much appreciated. The license requires you
 > retain the copyright notice; linking back is just a kind gesture, not required.
 
-**Enhanced & Legacy** texture and ped work for GTA V — find and fill short mip chains, shrink `.ytd`
-archives without breaking them, audit `.ymt` ↔ `.ydd` pairs, and build badge normal maps.
-Desktop app, CLI, and a DeepSeek Harness bundle.
+**Enhanced & Legacy** workbench for GTA V — **convert Legacy `.ytd` / `.ydd` / `.yft` into the gen9
+layout inside the GUI**, find and fill short mip chains, shrink `.ytd` archives without breaking them,
+audit `.ymt` ↔ `.ydd` pairs, and build badge normal maps. Desktop app, CLI, and a DeepSeek Harness
+bundle. No CodeWalker, no external converter, no external texture tool.
 
 [![tests](https://github.com/wokken198/gtav-asset-repair/actions/workflows/tests.yml/badge.svg)](https://github.com/wokken198/gtav-asset-repair/actions/workflows/tests.yml)
 [![release](https://img.shields.io/github/v/release/wokken198/gtav-asset-repair?label=release&color=2ea44f)](https://github.com/wokken198/gtav-asset-repair/releases/latest)
@@ -101,9 +102,10 @@ Mip work goes the other way: a 4-file dictionary with 25 short chains went from 
 
 ## Install
 
-**Windows, no Python:** download `gtav-asset-repair-0.7.1.zip` from the
+**Windows, no Python:** download `gtav-asset-repair-0.7.7.zip` from the
 [latest release](https://github.com/wokken198/gtav-asset-repair/releases/latest), unzip the **whole folder**
-(the exe needs `_internal/` next to it) and run `gtav-asset-repair.exe`.
+(the exe needs `_internal/` next to it) and run `gtav-asset-repair.exe`. If Windows SmartScreen blocks it
+(a fresh build has no signature), run `Run.bat` instead — a batch file is not blocked.
 
 **From source:**
 
@@ -281,9 +283,33 @@ What is not fine: shipping this code without the notice, or redistributing game 
 `gta_ped_check`, `gta_ped_fix`, …). The Python package is vendored inside, so nothing needs to be
 pip-installed. Details: [dsh-plugin/docs/DETAIL.md](dsh-plugin/docs/DETAIL.md).
 
+## Known limits
+
+- **Legacy → Enhanced only.** There is no gen9 → gen8 path; the newer layouts carry information the
+  older engine cannot express.
+- **Encrypted RPF entries are left alone.** The defrag report says how many; moving them byte-for-byte
+  would break the game, so they stay where they are.
+- **No model editing.** It does not fix bad UVs, bad bones or shader logic. It converts what is there —
+  if the source mesh is wrong, the output is wrong.
+- **FiveM escrow assets cannot be read.** They are encrypted, and nothing here decrypts them.
+
+## Reporting bugs
+
+Include:
+
+1. the file that broke, or a smaller sample that still reproduces it,
+2. the report line from the GUI, or the full CLI output including the `[exit code: N]` line,
+3. your version — the GUI footer shows it,
+4. whether the unpacked folder still has `_internal/` next to the exe.
+
+"It crashed" alone cannot be diagnosed: nearly every failure here is one specific byte in one specific
+archive.
+
 ## 中文简介
 
-**gtav-asset-repair** 是一个面向 **GTA V（增强版 gen9 / 旧版 gen8）** 的贴图与 PED 处理工具，桌面版和命令行都有。
+**gtav-asset-repair** 是一个面向 **GTA V（增强版 gen9 / 旧版 gen8）** 的资源处理台：**在 GUI 里把旧版
+`.ytd` / `.ydd` / `.yft` 转成 gen9 布局**，外加贴图压缩、MIP 补全、法线生成、PED 修复与 RPF 整理。
+桌面版和命令行都有，不依赖 CodeWalker、不依赖任何外部转换工具。
 
 五件事：**车标法线生成**、**YTD 贴图压缩**（降分辨率、降显存）、**Mip 链检查与补全**（消除远处闪烁）、
 **PED 的 `.ymt` / `.ydd` 校验与修复**（解决模型错位、LOD 异常、出生崩溃）、**RPF 碎片整理**
@@ -300,6 +326,25 @@ pip-installed. Details: [dsh-plugin/docs/DETAIL.md](dsh-plugin/docs/DETAIL.md).
 特点：处理前先用 `分析` 给出显存与体积预估；所有原地写入都留 `.bak`；压缩不会偷偷改格式（只有「激进」模式才换，
 且跳过 `script_rt_*`、法线、spec 类贴图）；两个世代的文件可以混在一批里处理，各自按原版本写回。
 它不修复模型本体，也不替代 OpenIV / Sollumz；RPF 整理这一项和 OpenIV 的功能重叠。
+
+## 已知限制
+
+- **只做 gen8 → gen9。** 没有反向路径，新布局里有些信息旧引擎表达不了。
+- **加密的 RPF 条目原样保留。** 整理报告会说明跳了几个；强行搬动会破坏游戏，所以不动它们。
+- **不编辑模型本体。** 不修 UV、不修骨骼、不改 shader 逻辑。它转换已有的东西——源网格是坏的，
+  输出就是坏的。
+- **FiveM escrow 资源读不了。** 那是加密的，这里没有解密能力。
+
+## 报告问题
+
+请附上：
+
+1. 出问题的文件（或能复现的更小样本），
+2. GUI 里的报告行，或命令行完整输出（含 `[exit code: N]` 那行），
+3. 版本号（GUI 左下角有），
+4. exe 旁边是否还留着 `_internal/`。
+
+只说「崩了」没法查：这里的失败几乎都是某个归档里的某一个字节。
 
 ## License
 
