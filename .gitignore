@@ -14,5 +14,9 @@ dist/
 *.spec
 .gtatools_tmp/
 
+# built program next to the sources (not source code)
+gtav-asset-repair-win64/
+*.zip
+
 # test scratch
 tests/_tmp/
