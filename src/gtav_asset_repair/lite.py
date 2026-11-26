@@ -657,6 +657,14 @@ def _temp_root() -> str:
     local = os.environ.get("LOCALAPPDATA")
     if local:
         candidates.append(os.path.join(local, "gtav_asset_repair", "_tmp"))
+    # The packaged build has no %TEMP% on locked-down machines, and the user
+    # profile root can be protected too; the folder holding the exe is the one
+    # place we know we are allowed to write.
+    if getattr(sys, "frozen", False):
+        candidates.append(os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "_tmp"))
+    else:
+        here = os.path.dirname(os.path.abspath(__file__))
+        candidates.append(os.path.join(os.path.dirname(here), "_tmp"))
     candidates.append(os.path.join(os.path.expanduser("~"), "gtav_asset_repair-output"))
     for path in candidates:
         try:

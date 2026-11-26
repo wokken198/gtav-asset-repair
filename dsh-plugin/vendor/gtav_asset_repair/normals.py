@@ -41,7 +41,13 @@ def height_field(rgba: np.ndarray, luma_weight: float = 0.7, mask_weight: float 
     return h
 
 
-def normal_from_height(h: np.ndarray, strength: float = 6.5, flat_margin: bool = True) -> np.ndarray:
+def normal_from_height(h: np.ndarray, strength: float = 2.0, flat_margin: bool = True) -> np.ndarray:
+    """Build a tangent-space normal map from a height field.
+
+    ``strength`` defaults to 2.0, the value the GUI (``gui.py``) and the badge
+    rebuild tool already use; callers of ``gtav_asset_repair.normals`` should
+    pass it explicitly when they want a different relief.
+    """
     gy, gx = np.gradient(h)
     # G stored with +V pointing up in texture space: a surface that rises as we
     # move down the image tilts away from the viewer, so G goes below 0.5.

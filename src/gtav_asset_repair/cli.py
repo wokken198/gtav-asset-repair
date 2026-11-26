@@ -417,6 +417,95 @@ def cmd_lite(args) -> int:
     return 0 if failed == 0 else 1
 
 
+def cmd_gen8to9(args) -> int:
+    from . import gen8to9 as g89
+
+    # `--json -` promises a JSON document on stdout, so the human report goes to
+    # stderr; otherwise anything parsing stdout gets prose before the JSON.
+    human = sys.stderr if args.json == "-" else sys.stdout
+
+    def say(*parts):
+        print(*parts, file=human)
+
+    src = os.path.abspath(args.src)
+    if not os.path.exists(src):
+        say("no such file or folder:", args.src)
+        return 2
+
+    dst = os.path.abspath(args.dst) if args.dst else ""
+    results: list = []
+    if os.path.isfile(src):
+        target = dst or work_path(os.path.basename(src))
+        if os.path.isdir(target):
+            target = os.path.join(target, os.path.basename(src))
+        if os.path.splitext(src)[1].lower() not in (".ytd", ".ymt", ".yld", ".ydd", ".yft"):
+            say("not a GTA resource:", os.path.basename(src))
+            return 2
+        if args.dry_run:
+            with open(src, "rb") as fh:
+                raw = fh.read()
+            try:
+                _out, action = g89.convert_bytes(raw, src)
+                problems: list = []
+            except (g89.PlaceholderArchive, g89.UnsupportedResource) as exc:
+                results = [g89.ConversionResult(rel=os.path.basename(src), action="skipped",
+                                                src_size=len(raw), note=str(exc))]
+            else:
+                results = [g89.ConversionResult(rel=os.path.basename(src), action=action,
+                                                src_size=len(raw), dst_size=len(_out),
+                                                problems=problems)]
+        else:
+            results = [g89.convert_file(src, target)]
+    else:
+        base = dst or work_path("gen9")
+        results = g89.convert_tree(src, base, dry_run=args.dry_run)
+
+    payload = []
+    counts = {"converted": 0, "copied": 0, "placeholder": 0, "skipped": 0, "failed": 0}
+    for item in results:
+        counts[item.action] = counts.get(item.action, 0) + 1
+        entry = {"file": item.rel, "action": item.action, "src_size": item.src_size,
+                 "dst_size": item.dst_size}
+        if item.note:
+            entry["note"] = item.note
+        if item.problems:
+            entry["problems"] = item.problems
+        payload.append(entry)
+
+        if item.action == "skipped":
+            for line in item.note.splitlines():
+                say(f"skip {item.rel}: {line}")
+        elif item.action == "failed":
+            say(f"FAIL {item.rel}")
+            for line in (item.note or "unknown error").splitlines():
+                say(f"  ! {line}")
+        elif item.problems:
+            say(f"FAIL {item.rel}")
+            for problem in item.problems:
+                say(f"  ! {problem}")
+        elif item.action == "copied":
+            say(f"ok   {item.rel:32s} copied  {item.src_size} B (RSC7 version unchanged)")
+        elif item.action == "placeholder":
+            say(f"ok   {item.rel:32s} stub    {item.src_size} B (version byte only)")
+        else:
+            say(f"ok   {item.rel:32s} gen9    {item.src_size} B -> {item.dst_size} B")
+
+    skipped = counts.get("skipped", 0)
+    failed = counts.get("failed", 0) + sum(1 for item in results if item.problems)
+    say(f"\n{counts.get('converted', 0)} converted, {counts.get('copied', 0)} copied, "
+        f"{counts.get('placeholder', 0)} stub, {skipped} skipped, {failed} failed")
+    if args.dry_run:
+        say("dry run: no file was written")
+    if skipped:
+        say("skipped files keep the gen8 payload; rerun with --json to see the "
+            "per-file reason")
+    if args.json == "-":
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    elif args.json:
+        _emit_json(payload, args.json)
+    return 1 if failed else 0
+
+
 def _ped_targets(paths) -> list[tuple[str, str, str]]:
     from . import ped as pedmod
     found: list[tuple[str, str, str]] = []
@@ -581,7 +670,7 @@ def build_parser() -> argparse.ArgumentParser:
     n.add_argument("src", help="DDS/PNG file, or a folder searched recursively")
     n.add_argument("--out", default="", help="output folder (default: <work>/normals, mirrors the input tree)")
     n.add_argument("--scratch", default="", help="scratch folder for decoded PNGs (default: <out>/_work)")
-    n.add_argument("--strength", type=float, default=6.5, help="slope gain (default 6.5)")
+    n.add_argument("--strength", type=float, default=2.0, help="slope gain (default 2.0, same as the GUI)")
     n.add_argument("--blur", type=float, default=1.2, help="height-field blur radius (default 1.2)")
     n.add_argument("--fmt", default="DXT5", help="texconv format, e.g. DXT5 / BC5_UNORM")
     n.add_argument("--max-mips", type=int, default=12, help="cap the generated mip chain")
@@ -670,6 +759,17 @@ def build_parser() -> argparse.ArgumentParser:
     pf.add_argument("--core-dir", default="", help="folder holding CodeWalker.Core.dll")
     pf.add_argument("--apply", action="store_true", help="actually write; otherwise only report the action")
     pf.set_defaults(func=cmd_ped_fix)
+
+    g_ = sub.add_parser("gen8to9", parents=[common],
+                        help="upgrade a gen8 pack to gen9 (YTD re-header, YDD/YFT "
+                             "rebuild, YMT/YLD passthrough)")
+    g_.add_argument("src", help="a gen8 .ytd/.ydd file, or a folder to walk recursively")
+    g_.add_argument("dst", nargs="?", default="",
+                    help="output file/folder (default: <work>/<name> for one file, "
+                         "<work>/gen9 for a folder, mirrored tree)")
+    g_.add_argument("--dry-run", action="store_true", help="report the plan, write nothing")
+    g_.add_argument("--json", nargs="?", const="-", default="", help=json_help)
+    g_.set_defaults(func=cmd_gen8to9)
 
     r_ = sub.add_parser("rpf", parents=[common],
                         help="compact an .rpf container so freed space reaches disk (no CodeWalker)")

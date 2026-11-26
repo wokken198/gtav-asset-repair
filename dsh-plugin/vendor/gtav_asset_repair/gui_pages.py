@@ -8,19 +8,23 @@ what makes the freed space reach disk.
 
 import os
 import queue
+import tempfile
 import threading
 import tkinter as tk
 
 from . import ped
+from types import SimpleNamespace
 from tkinter import ttk
 from concurrent.futures import ThreadPoolExecutor
 from tkinter import filedialog
 
-from . import lite, rpf, settings, ytd as ytdmod
+from . import dds as ddsmod
+from . import gen8to9, lite, rpf, settings, ytd as ytdmod
 from .gui import Card, FileList, HelpDot, _font, _mono
 
 SUFFIX_TEX = (".dds", ".ytd")
 SUFFIX_YTD = (".ytd",)
+SUFFIX_GEN8 = (".ytd", ".ydd", ".yft", ".ymt", ".yld")
 
 
 
@@ -62,6 +66,20 @@ def _walk(folder, suffixes):
 
 def _inspect_one(path):
     """Read one dictionary; returns a small dict, never raises."""
+    if path.lower().endswith(".dds"):
+        # A loose DDS has one texture and no RSC7 wrapper, so the dictionary
+        # reader cannot open it.  Read the header instead; the mip page treats
+        # a .dds exactly like a one-texture dictionary.
+        try:
+            header = ddsmod.read_header(path)
+        except Exception as exc:                              # noqa: BLE001
+            return {"path": path, "error": str(exc), "textures": [], "version": 0,
+                    "legacy": False}
+        tex = SimpleNamespace(name=os.path.basename(path), width=header.width,
+                              height=header.height, format=header.label,
+                              mips=header.mips, bytes=_size_of(path))
+        return {"path": path, "error": "", "textures": [tex], "version": 0,
+                "legacy": False}
     try:
         version = ytdmod.rsc7_version(path)
         info = ytdmod.inspect([path])[0]
@@ -280,6 +298,7 @@ class _Page:
             return
         self.stop_flag = True
         self.set_state(self.app.t("stopping"))
+        self.log(self.app.t("report.stopped"))
 
     def log(self, text):
         self._events.put(("log", text))
@@ -953,6 +972,9 @@ class YtdPage(_Page):
     def _sync_cw(self):
         """Kept as a no-op: CodeWalker is no longer part of any code path."""
         self.app.core_dir = ""
+        # retranslate() ends up here on every language switch, so the legacy banner
+        # has to follow the table instead of staying in the language it was packed in.
+        self.bad.configure(text=self.app.t("ytd.legacy"))
 
     # -- files -----------------------------------------------------------
     def pick(self):
@@ -1140,8 +1162,12 @@ class YtdPage(_Page):
         self.spawn(work)
 
     def _on_compress_done(self, payload):
+        self._last_compress = payload
+        self._render_compress_summary(payload)
+
+    def _render_compress_summary(self, payload):
         done, failed, skipped, before, after, mem_before, mem_after = payload
-        lines = ["done: %d written, %d failed, %d skipped" % (done, failed, skipped)]
+        lines = [self.app.t("ytd.done", done=done, failed=failed, skipped=skipped)]
         if mem_before:
             lines.append(self.app.t("ytd.mem", before=mem_before, after=mem_after,
                                     pct=round((mem_after - mem_before) * 100.0 / mem_before)))
@@ -1191,6 +1217,10 @@ class YtdPage(_Page):
         super().retranslate()
         self.panel.retranslate()
         self._sync_cw()
+        # The summary is built once when a job finishes; rebuild it so switching
+        # language does not leave the old table's wording behind.
+        if getattr(self, "_last_compress", None) is not None:
+            self._render_compress_summary(self._last_compress)
 
 
 def build_mips_page(app, parent):
@@ -1713,6 +1743,7 @@ class RpfPage(_Page):
             self._stop = True
             self._cancel.set()
             self.state.configure(text="stopping: killing the worker process...")
+            self._post(self.app.t("report.stopped"), "warn")
 
     def _post(self, text, tag=None):
         self.app.after(0, lambda t=text, g=tag: self.write_line(t, g))
@@ -1780,3 +1811,9 @@ class RpfPage(_Page):
 def build_rpf_page(app, parent):
     page = RpfPage(app, parent)
     return page
+
+
+def build_convert_page(app, parent):
+    # the real page lives in gui_convert; keep this name so older imports work
+    from .gui_convert import build_convert_page as build
+    return build(app, parent)

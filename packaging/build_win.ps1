@@ -29,7 +29,12 @@ try {
         --icon resources/gtatools.ico `
         --add-binary "$Texconv;." `
         --add-data "resources;resources" `
+        --add-data "src/gtav_asset_repair/vendor/fivefury/data;fivefury/data" `
+        --add-data "src/gtav_asset_repair/vendor/fivefury/drawable/Shaders.xml;fivefury/drawable" `
+        --add-data "src/gtav_asset_repair/vendor/fivefury/ydr/ShadersGen9Conversion.xml;fivefury/ydr" `
         --paths src `
+        --paths "src/gtav_asset_repair/vendor" `
+        --collect-all fivefury `
         --hidden-import PIL.ImageTk `
         packaging/gui_entry.py
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
@@ -52,12 +57,21 @@ try {
     Write-Host "==> ship docs next to the exe"
     # The GitHub README is written for people browsing the repo; the zip gets the
     # user guide instead, renamed to README.md so it is the first thing people open.
-    $guide = "packaging\README-portable.md"
-    if (-not (Test-Path $guide)) { throw "missing $guide" }
-    Copy-Item $guide (Join-Path $out "README.md") -Force
+    # Two editions: README.md (English) and README.cn.md (Chinese). The old
+    # single bilingual README-portable.md is gone on purpose - one language per
+    # file means neither reader scrolls past paragraphs they cannot read.
+    $guides = @{ "packaging\README.md" = "README.md"; "packaging\README.cn.md" = "README.cn.md" }
+    foreach ($src in $guides.Keys) {
+        if (-not (Test-Path $src)) { throw "missing $src" }
+        Copy-Item $src (Join-Path $out $guides[$src]) -Force
+    }
     foreach ($doc in @("CHANGELOG.md", "LICENSE")) {
         if (Test-Path $doc) { Copy-Item $doc (Join-Path $out $doc) -Force }
     }
+    # SmartScreen blocks freshly built unsigned exes on every rebuild. A tiny
+    # launcher next to it starts without that prompt, so ship one.
+    $launcher = Join-Path $out "Run.bat"
+    Set-Content -Path $launcher -Value "@echo off`r`nstart `"`" `"%~dp0gtav-asset-repair.exe`"" -Encoding ASCII -NoNewline
 
     $zip = Join-Path $root "dist\$Name-portable.zip"
     if (Test-Path $zip) { Remove-Item $zip -Force }

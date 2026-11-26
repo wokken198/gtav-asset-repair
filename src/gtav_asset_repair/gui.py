@@ -28,7 +28,7 @@ from . import dds as ddsmod, settings
 from .normals import height_field, normal_from_height, shade_preview
 
 APP_TITLE = "gtav-asset-repair (Enhanced & Legacy)"
-VERSION = "0.7.1"
+VERSION = "0.7.7"
 ISSUE_URL = "https://github.com/wokken198/gtav-asset-repair/issues"
 CHANGELOG_URL = "https://github.com/wokken198/gtav-asset-repair/blob/main/CHANGELOG.md"
 
@@ -42,6 +42,7 @@ LANG = {
         "nav.mip": "Mip check (DDS/YTD)",
         "nav.rpf": "Defragment (RPF)",
         "nav.ytd": "Textures (YTD)",
+        "nav.convert": "Convert Gen8→9",
         "title": "Badge normal map",
         "subtitle": "pick files or a folder, tune the slope, write next to the input",
         "page.normals.title": "Generate Normal Maps",
@@ -51,6 +52,59 @@ LANG = {
         "page.mips.sub": "Detects missing mip levels and auto-fills the chain. Fixes distant shimmer/moire and cuts render cost. Original .ytd/.dds backed up as a .bak file.",
         "page.ytd.title": "Texture compression",
         "page.ytd.sub": "Batch-compress textures within .ytd files and save them to the original folder. The original files are backed up as .bak.",
+        "page.convert.title": "Gen8 → Gen9 conversion",
+        "page.convert.sub": "Turn gen8 .ytd / .ydd / .yft into gen9. Convert a car's .yft, _hi.yft and .ytd together.",
+        "convert.about": "How it works",
+        "convert.folders": "Folders",
+        "convert.input": "Input folder",
+        "convert.report": "Report",
+        "convert.stop": "Stop",
+        "convert.bar": "{n} / {total} files",
+        "convert.idle": "no run yet",
+        "convert.summary": "{converted} converted, {copied} copied, {placeholder} stub, {skipped} skipped, {failed} failed",
+        "convert.scanning": "scanning the input folder ...",
+        "convert.empty": "the input folder has no files",
+        "convert.need_in": "pick an input folder first",
+        "convert.need_out": "pick an output folder first",
+        "convert.same_dir": "the output folder must differ from the input folder",
+        "convert.need_writable": "cannot write to {path}: Windows refuses to create folders here (Controlled Folder Access or permissions). Pick a folder you can write to, or allow this app in Windows Security.",
+        "convert.create_title": "Create output folder?",
+        "convert.confirm_create": "The output folder does not exist:\n\n{path}\n\nWould you like to create it?",
+        "convert.skip.gen9": "already gen9",
+        "convert.skip.ext": "extension not supported",
+        "convert.skip.read": "cannot be converted",
+        "convert.error": "error: {err}",
+        "convert.files": "Files",
+        "convert.add": "Add files",
+        "convert.add_dir": "Add folder",
+        "convert.desc": (
+            "It reads every mesh, rewrites it in the gen9 layout and reads the result back to check it.\n"
+            "That is what keeps script_rt_* render-target flags alive: losing them crashes the game when the car spawns.\n"
+            "A 13 MB body file takes about 10 seconds; one car (body, _hi and paint) around 20."
+        ),
+        "convert.output": "Output",
+        "convert.out_auto": "auto: {path}",
+        "convert.out_custom": "custom: {path}",
+        "convert.out_hint": "default is <folder>-gen9 next to the input folder; Browse to override",
+        "convert.out_reset": "use default",
+        "convert.browse": "Browse...",
+        "convert.start": "Convert",
+        "convert.pick": "add files first",
+        "convert.starting": "starting...",
+        "convert.running": "converting {i}/{n} ...",
+        "convert.results": "Results",
+        "convert.done": "converted {n} file(s): {ok} ok, {skipped} skipped, {warn} with warnings",
+        "convert.stopped": "stopped by user after {n} file(s); finished files are kept",
+        "report.stopped": "stopped by user; already finished files stay on disk",
+        "convert.c_action": "action",
+        "convert.c_file": "file",
+        "convert.c_size": "size",
+        "convert.c_note": "note",
+        "convert.act.converted": "converted",
+        "convert.act.copied": "copied",
+        "convert.act.placeholder": "placeholder",
+        "convert.act.skipped": "skipped",
+        "convert.act.failed": "failed",
         "page.ped.title": "Ped YMT repair",
     "page.ped.sub": "Validate the .ymt against its .ydd and correct the parameter drift, which may cause misplaced parts, broken LODs, wrong textures, random loading and spawn crashes.",
     "ped.files": "PED files",
@@ -118,9 +172,6 @@ LANG = {
         "ytd.cw_deep": "Deep search",
         "ytd.cw_deep_busy": "deep search running, this can take a minute ...",
         "ytd.cw_not_found": "no CodeWalker.Core.dll found; use Browse to point at the folder",
-        "ytd.cw_missing": "CodeWalker folder not set. Compress YTD, MIP chains, PED check/fix and "
-                          "audit all work without it; only Repack .rpf needs CodeWalker or OpenIV. "
-                          "Set the folder on the Textures page.",
         "ytd.pick": "add a .ytd file first",
         "ytd.files": "YTD files",
         "ytd.add": "Add YTD",
@@ -133,7 +184,7 @@ LANG = {
         "ytd.start": "Compress",
         "ytd.none": "add a .ytd file first",
         "ytd.no_cw": "set the CodeWalker folder first",
-        "ytd.legacy": "Legacy assets detected \u2014 remember to convert them with CodeWalker before using them in the Enhanced edition.",
+        "ytd.legacy": "Legacy assets detected \u2014 convert them before using them in the Enhanced edition.",
         "ytd.version_gen9": "GEN9",
         "ytd.version_gen8": "GEN8",
         "ytd.done": "done: {out}",
@@ -157,7 +208,8 @@ LANG = {
         "ytd.add_dir": "Add folder",
         "ytd.mem": "memory  {before:.1f} MB -> {after:.1f} MB  ({pct}%)",
         "ytd.file": "files   {before:.1f} MB -> {after:.1f} MB  ({pct}%)",
-        "ytd.disk_note": "saves VRAM and load time; disk space comes back only after the .rpf is repacked (OpenIV defrag)",
+        "ytd.done": "done: {done} written, {failed} failed, {skipped} skipped",
+        "ytd.disk_note": "saves VRAM and load time; disk space comes back only after the .rpf is repacked (defrag)",
         "mode.cap": "Option 2 \u00b7 Cap at the limit",
         "mode.tier": "Option 1 \u00b7 Size down to nearest preset tier",
         "mode.agg": "Option 3 \u00b7 Auto reformat (test in game)",
@@ -239,6 +291,7 @@ LANG = {
         "nav.mip": "MIP 检查（YTD/DDS）",
         "nav.rpf": "Defragment (RPF)",
         "nav.ytd": "纹理压缩（YTD）",
+        "nav.convert": "Gen8→Gen9 转换",
         "title": "车标法线",
         "subtitle": "选择文件或文件夹，调整参数，结果写到输入所在目录",
         "page.normals.title": "生成法线贴图",
@@ -248,6 +301,59 @@ LANG = {
         "page.mips.sub": "自动检测缺失的 mip 层级并填充链——修复远处的闪烁和摩尔纹，并降低渲染开销；原 .ytd/.dds 文件将备份为 .bak 文件。",
         "page.ytd.title": "纹理压缩",
         "page.ytd.sub": "批量缩小 .ytd 文件内的纹理，并将其保存回原文件夹；原文件将备份为 .bak 文件。",
+        "page.convert.title": "Gen8 → Gen9 转换",
+        "page.convert.sub": "把 gen8 的 .ytd / .ydd / .yft 转成 gen9。一辆车的 .yft、_hi.yft、.ytd 要一起转。",
+        "convert.about": "它是怎么做的",
+        "convert.folders": "文件夹",
+        "convert.input": "输入文件夹",
+        "convert.report": "报告",
+        "convert.stop": "停止",
+        "convert.bar": "{n} / {total} 个文件",
+        "convert.idle": "尚未开始",
+        "convert.summary": "{converted} 个已重建，{copied} 个已复制，{placeholder} 个占位，{skipped} 个跳过，{failed} 个失败",
+        "convert.scanning": "正在扫描输入文件夹…",
+        "convert.empty": "输入文件夹里没有文件",
+        "convert.need_in": "请先选择输入文件夹",
+        "convert.need_out": "请先选择输出文件夹",
+        "convert.same_dir": "输出文件夹不能与输入文件夹相同",
+        "convert.need_writable": "无法写入 {path}：系统拒绝在此新建文件夹（受控文件夹访问或权限限制）。请换到可写的目录，或在 Windows 安全中心允许本程序。",
+        "convert.create_title": "要新建输出文件夹吗？",
+        "convert.confirm_create": "输出文件夹不存在：\n\n{path}\n\n要创建吗？",
+        "convert.skip.gen9": "已是 gen9",
+        "convert.skip.ext": "扩展名不受支持",
+        "convert.skip.read": "无法转换",
+        "convert.error": "错误：{err}",
+        "convert.files": "文件",
+        "convert.add": "添加文件",
+        "convert.add_dir": "添加文件夹",
+        "convert.desc": (
+            "逐网格读出、按 gen9 结构重写，再读回来自检。\n"
+            "这样 script_rt_* 的渲染目标标志才能保住——丢了它，车一刷出游戏就崩。\n"
+            "13 MB 的车身文件约 10 秒，一辆车（车身、_hi、贴图）约 20 秒。"
+        ),
+        "convert.output": "输出",
+        "convert.out_auto": "自动：{path}",
+        "convert.out_custom": "自定义：{path}",
+        "convert.out_hint": "默认是输入文件夹同级的 <文件夹名>-gen9；点「浏览」可改",
+        "convert.out_reset": "用默认",
+        "convert.browse": "浏览...",
+        "convert.start": "转换",
+        "convert.pick": "请先添加文件",
+        "convert.starting": "正在启动…",
+        "convert.running": "正在转换 {i}/{n} …",
+        "convert.results": "结果",
+        "convert.done": "完成 {n} 个文件：{ok} 个成功，{skipped} 个跳过，{warn} 个有告警",
+        "convert.stopped": "已由用户中止：处理了 {n} 个文件，已完成的部分保留",
+        "report.stopped": "已由用户中止；已完成的文件保留在磁盘上",
+        "convert.c_action": "动作",
+        "convert.c_file": "文件",
+        "convert.c_size": "大小",
+        "convert.c_note": "说明",
+        "convert.act.converted": "已重建",
+        "convert.act.copied": "已复制",
+        "convert.act.placeholder": "占位",
+        "convert.act.skipped": "已跳过",
+        "convert.act.failed": "失败",
         "page.rpf.title": "Defragment (RPF)",
         "page.rpf.sub": "重建RPF归档，把有效资源连续排布并重写目录，剔除条目遗留的内部空洞并还给磁盘。未加密的子RPF也会递归一并清理碎片。",
         "mips.files": "文件",
@@ -289,8 +395,6 @@ LANG = {
         "ytd.cw_deep": "深度搜索",
         "ytd.cw_deep_busy": "深度搜索中，可能要一分钟左右…",
         "ytd.cw_not_found": "没找到 CodeWalker.Core.dll；用「浏览」手动指定文件夹",
-        "ytd.cw_missing": "未设置 CodeWalker 文件夹。压缩 YTD、修复 MIP 链、PED 检查/修复、审计都不需要它；"
-                          "只有「整理归档」需要 CodeWalker 或 OpenIV。请在「纹理」页设置文件夹。",
         "ytd.pick": "请先添加 .ytd 文件",
         "ytd.files": "YTD 文件",
         "ytd.add": "添加 YTD",
@@ -303,7 +407,7 @@ LANG = {
         "ytd.start": "开始压缩",
         "ytd.none": "先添加 .ytd 文件",
         "ytd.no_cw": "先设置 CodeWalker 目录",
-        "ytd.legacy": "检测到旧版（GEN8）资源 \u2014 别忘了先用 CodeWalker 转换，再在增强版中使用。",
+        "ytd.legacy": "检测到旧版（GEN8）资源 \u2014 用于增强版前请先转换。",
         "ytd.version_gen9": "GEN9",
         "ytd.version_gen8": "GEN8",
         "ytd.done": "完成：{out}",
@@ -327,7 +431,8 @@ LANG = {
         "ytd.add_dir": "添加文件夹",
         "ytd.mem": "显存  {before:.1f} MB -> {after:.1f} MB  ({pct}%)",
         "ytd.file": "文件  {before:.1f} MB -> {after:.1f} MB  ({pct}%)",
-        "ytd.disk_note": "省下的是显存与载入时间；磁盘空间要等 .rpf 重新整理（OpenIV defrag）后才释放",
+        "ytd.done": "完成：写入 {done} 个，失败 {failed} 个，跳过 {skipped} 个",
+        "ytd.disk_note": "省下的是显存与载入时间；磁盘空间要等 .rpf 重新整理（defrag）后才释放",
         "mode.cap": "\u65b9\u5f0f 2 \u00b7 \u5c01\u9876\u5230\u4e0a\u9650",
         "mode.tier": "\u65b9\u5f0f 1 \u00b7 \u5c31\u8fd1\u964d\u6863",
         "mode.agg": "\u65b9\u5f0f 3 \u00b7 \u81ea\u52a8\u91cd\u683c\u5f0f\u5316\uff08\u8bf7\u8fdb\u6e38\u620f\u9a8c\u8bc1\uff09",
@@ -1318,7 +1423,12 @@ class App(tk.Tk):
         self._apply_theme()
         self._apply_lang()
         self._refresh_count()
-        self._purge_stale_temp()
+        try:
+            self._purge_stale_temp()
+        except Exception:                                        # noqa: BLE001
+            # Housekeeping must never prevent the window from opening; anything
+            # that still goes wrong here is a leftover we can ignore.
+            pass
         self._draw_preview()
         self.after(80, self._pump)
 
@@ -1737,9 +1847,10 @@ class App(tk.Tk):
 
         self.nav_rows = {}
         self._nav_hover = None
-        icons = {"normals": "◆", "ytd": "▤", "mips": "▥", "ped": "⚙", "rpf": "▣"}
+        icons = {"normals": "◆", "ytd": "▤", "mips": "▥", "ped": "⚙", "rpf": "▣",
+                 "convert": "⇄"}
         for page, key in (("normals", "nav.normal"), ("ytd", "nav.ytd"), ("mips", "nav.mip"),
-                          ("ped", "nav.ped"), ("rpf", "nav.rpf")):
+                          ("ped", "nav.ped"), ("rpf", "nav.rpf"), ("convert", "nav.convert")):
             row = tk.Canvas(self._nav, bg=self.c("nav"), highlightthickness=0, bd=0,
                             height=int(36 * self.sx), width=int(192 * self.sx))
             row.pack(fill="x", padx=10, pady=1)
@@ -1979,13 +2090,16 @@ class App(tk.Tk):
     # ------------------------------------------------------------ page switching
     def show_page(self, name):
         if name not in self.pages:
-            from .gui_pages import build_mips_page, build_ped_page, build_rpf_page, build_ytd_page
+            from .gui_convert import build_convert_page
+            from .gui_pages import (build_mips_page, build_ped_page, build_rpf_page,
+                                    build_ytd_page)
 
             page = tk.Frame(self.page_host, bg=self.c("bg"))
             self.style_widget(page, "bg")
             self.pages[name] = page
             builder = {"mips": build_mips_page, "ped": build_ped_page,
-                       "rpf": build_rpf_page, "ytd": build_ytd_page}[name]
+                       "rpf": build_rpf_page, "ytd": build_ytd_page,
+                       "convert": build_convert_page}[name]
             holder = builder(self, page)
             self.page_objects[name] = holder.owner
         for key, page in self.pages.items():
@@ -2122,7 +2236,13 @@ class App(tk.Tk):
         return bg.convert("RGB")
 
     def _scratch_roots(self) -> list[str]:
-        roots = [os.path.join(tempfile.gettempdir(), "gtav_asset_repair")]
+        roots: list[str] = []
+        try:
+            roots.append(os.path.join(tempfile.gettempdir(), "gtav_asset_repair"))
+        except OSError:
+            # A read-only or missing %TEMP% must not take the whole app down at
+            # start-up; the LOCALAPPDATA and exe-dir roots below still work.
+            pass
         local = os.environ.get("LOCALAPPDATA")
         if local:
             roots.append(os.path.join(local, "gtav_asset_repair", "_tmp"))
@@ -2155,7 +2275,11 @@ class App(tk.Tk):
     def _purge_stale_temp(self):
         """Drop leftovers from an interrupted run (older than a day)."""
         cutoff = time.time() - 86400
-        for root in self._scratch_roots()[:2]:
+        try:
+            roots = self._scratch_roots()
+        except OSError:
+            return
+        for root in roots[:2]:
             try:
                 for name in os.listdir(root):
                     path = os.path.join(root, name)

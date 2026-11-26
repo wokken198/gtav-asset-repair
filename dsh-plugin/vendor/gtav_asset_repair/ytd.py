@@ -104,20 +104,30 @@ _PLACEHOLDER_LIMIT = 512
 
 
 def _is_placeholder(path: str) -> bool:
-    """True for a stub archive: a valid RSC7 header with no room for a dictionary.
+    """True for a stub archive: a valid RSC7 header with no graphics page.
 
     Some car packs ship an empty `+hi.ytd` beside the real files so the game's
-    extra-high block still resolves.  Such a stub is a few dozen bytes -- far too
-    small to hold even a dictionary header, let alone a texture.
+    extra-high block still resolves.  Size alone does not settle it: a real
+    dictionary can be under 512 bytes (a single 8x8 block with no mips, e.g.
+    `mp_m_niko_01/lowr_diff_000_a_uni` at 186 bytes), so the header flags have to
+    say the graphics segment is empty as well.
     """
     try:
         if os.path.getsize(path) > _PLACEHOLDER_LIMIT:
             return False
         with open(path, "rb") as fh:
-            head = fh.read(8)
+            head = fh.read(16)
     except OSError:
         return False
-    return len(head) == 8 and head[:4] == b"RSC7"
+    if len(head) < 16 or head[:4] != b"RSC7":
+        return False
+    try:
+        _load_reader()
+        from fivefury import resource       # noqa: PLC0415 - after _load_reader
+        header = resource.read_rsc7_header(head)
+        return int(resource.get_resource_size_from_flags(header.graphics_flags)) == 0
+    except Exception:                        # noqa: BLE001 - never mask the real error
+        return False
 
 
 def _read_error(exc: BaseException, path: str = "") -> str:
