@@ -368,7 +368,14 @@ class ConvertPage(tk.Frame):
             status = None
             bar = None
             for _ in range(40):
-                kind, payload = self._events.get_nowait()
+                try:
+                    kind, payload = self._events.get_nowait()
+                except queue.Empty:
+                    # Break here instead of letting Empty escape: the batch
+                    # collected so far still has to be written out, and an
+                    # escaping exception used to skip _flush_rows below --
+                    # every row except the last slice never reached the pane.
+                    break
                 if kind == "total":
                     self._total = payload
                     bar = (0, max(1, payload))
@@ -420,6 +427,11 @@ class ConvertPage(tk.Frame):
         if getattr(self.app, "busy_owner", None) is self:
             self.app.busy_owner = None
         self._set_running(False)
+        # The last row usually arrives in the same slice as "finish", and that
+        # slice resets the progress update -- so fill the bar here instead of
+        # leaving it at whatever fraction the previous slice reported.
+        if total:
+            self._bar(total, total)
         summary = self._summary_text(counts, failed)
         self._append(summary, "summary")
         self._counts = (counts, failed)
