@@ -6,6 +6,15 @@ Notable changes only. UI polish, internal fixes and development notes are left o
 
 **Gen8 to Gen9 conversion, in the GUI.**
 
+### Fixed
+
+- Convert page: only the last line of the report survived on multi-file runs, and the progress bar
+  stopped one slice short of the end.
+- Mip check and texture compression failed with `no writable scratch directory` when `%TEMP%`,
+  `%TMP%` and `%LOCALAPPDATA%` were all unusable; the program folder is now the last resort.
+- The YTD page warning kept its English text after switching language and still pointed at
+  CodeWalker.
+
 ### Added
 
 - **Convert page** — folder in, folder out. Walks every subfolder, mirrors the tree, reports one line
