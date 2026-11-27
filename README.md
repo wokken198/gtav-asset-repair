@@ -48,7 +48,7 @@ Rebuild Legacy `.ytd` / `.ydd` / `.yft` in the gen9 layout; copy `.ymt` / `.yld`
 Point it at a folder and press Convert. Every archive comes out at its own new version (13 → 5 for
 textures, 165 → 159 for drawables, 162 → 171 for fragments), with a report line per file and a total at
 the end. Already-gen9 files are skipped, so re-running is safe. A 13 MB body file takes about eight
-seconds; one car — body, `_hi` and paint — about twenty.
+seconds; one car — body, `_hi` and paint — about fifteen.
 
 **Why it rewrites instead of patching.** CodeWalker's Asset Converter and Cfx's Alchemist patch bytes in
 place: fast, and fine for what they preserve. This tool decodes every field, rebuilds it in the gen9
@@ -193,7 +193,9 @@ The footer link and the note in the corner are there because step 5 is not optio
 
 ## CLI
 
-Ten subcommands, all with the same `--json`, `--work` and error conventions:
+Ten subcommands. Six of them accept `--json` — `audit`, `ytd list`, `lite`, `mips check`,
+`ped check` and `gen8to9` (`--json` alone prints to stdout, `--json path` writes a file;
+`ped check --json` takes a path only). `--work` and the exit-code convention are the same everywhere:
 
 | command | what it does |
 |---|---|
@@ -209,8 +211,8 @@ Ten subcommands, all with the same `--json`, `--work` and error conventions:
 | `gtav-asset-repair gen8to9` | upgrade a Legacy folder to Enhanced: `.ytd` re-headered, `.ydd` and `.yft` rebuilt for gen9, `.ymt`/`.yld` copied |
 
 ```bash
-# normal map next to the source
-gtav-asset-repair normals badge.dds --strength 4.5 --fmt DXT5
+# normal map next to the source (strength defaults to 2.0)
+gtav-asset-repair normals badge.dds --strength 3.0 --fmt DXT5
 
 # what is inside an archive, and which chains are short
 gtav-asset-repair ytd list car.ytd
@@ -376,7 +378,7 @@ MIT for the code. Game-derived assets are not covered and are not shipped here.
 
 选文件夹、按「转换」即可。每个归档换成自己的新版本号（贴图 13 → 5、drawable 165 → 159、
 fragment 162 → 171），逐文件一行报告，末尾给总计。已经是 gen9 的文件会被跳过，重复跑是安全的。
-13 MB 的 body 文件约 8 秒，一个 Vehicle（body、`_hi`、贴图）约 20 秒。
+13 MB 的 body 文件约 8 秒，一个 Vehicle（body、`_hi`、贴图）约 15 秒。
 
 **为什么走重建而不是改字节。** CodeWalker 的 Asset Converter 和 Cfx 的 Alchemist 都是就地改字节：
 快，但只保住它们认得的东西。这个工具把每个字段解码、按 gen9 布局重建、再和源文件逐值比对，
@@ -463,7 +465,8 @@ Blender 里改了组件却忘了变化文件——GTAV 就会出现部件错位�
 ## 命令行
 
 十个子命令（`normals`、`audit`、`scale`、`pack`、`ytd list`、`mips`、`lite`、`ped`、`rpf`、
-`gen8to9`）覆盖上面全部能力，均可加 `--json` 输出结构化结果，适合脚本批量跑。
+`gen8to9`）覆盖上面全部能力。其中六个支持 `--json`（`audit`、`ytd list`、`lite`、`mips check`、
+`ped check`、`gen8to9`），适合脚本批量跑。
 完整参数表见[英文的 CLI 一节](#cli)。
 
 ## 安全规则
