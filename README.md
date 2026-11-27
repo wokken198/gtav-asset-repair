@@ -484,7 +484,7 @@ Blender 里改了组件却忘了变化文件——GTAV 就会出现部件错位�
 
 **能做什么**
 
-- ✅ **只处理 Vehicle 与 Ped 资源。** 车包与 Ped 模型的 `.ytd`、`.ydd`、`.yft`、`.ymt`、`.yld`。
+- ✅ **只处理 Vehicle 与 Ped 资源**，相关 `.ytd`、`.ydd`、`.yft`、`.ymt`、`.yld`。
 - ✅ **Legacy → Enhanced。** `.ytd` / `.ydd` / `.yft` 从 gen8 转 gen9，`.ymt` / `.yld` 原样复制。
 - ✅ **两代通用的整理工作。** 贴图压缩、MIP 链、`.ymt` ↔ `.ydd` 校验、`.rpf` 碎片整理——
   这四样不分世代，gen8 的文件也能直接用。
