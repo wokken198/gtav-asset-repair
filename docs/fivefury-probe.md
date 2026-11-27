@@ -15,7 +15,7 @@ What it does *not* give us: a CodeWalker-compatible XML layer. Our `export → s
 
 ## Round 1 — the six questions, answered
 
-Every answer is 实测 (measured) unless marked 文档 / 推测.
+Every answer is measured unless marked documented / inferred.
 
 ### 1. Can it read a real `.ytd`, and does the texture list match CodeWalker's XML?
 
@@ -118,7 +118,7 @@ YTD read (1), gen9 scale-and-write (2, 3), descriptor preservation (5) and YMT r
 patch #2, which affects `lite` / `fix_mips` on gen8 archives only. `ped check` / `ped fix`
 are unaffected because **YMT has no generation split**: RSC7 version 2 with the same header
 on both, and CodeWalker's own converter logs `MaiT.ymt - conversion not required, directly
-copying file` (实测; 文档: CodeWalker *Convert Assets* 对话框).
+copying file` (measured; documented: the CodeWalker *Convert Assets* dialog).
 
 ## Implementation status (2026-11-24)
 
@@ -155,7 +155,7 @@ Two layout traps were found that way, both invisible from source runs: fivefury 
 
 Vendoring: `src/gtav_asset_repair/vendor/fivefury/` (459 modules + `_native_abi3.pyd` 576,000 B + 3.9 MB of `data/*.dat` + two shader XMLs), 11 MB of source. `trimesh` is replaced by a three-file stub (`Trimesh`, `Scene`, `PointCloud`, `MultiMaterial`, `PBRMaterial`, `SimpleMaterial`) because fivefury imports it eagerly at package level and nothing on our paths uses it. Two workarounds live in *our* code so the vendored copy stays upgradeable: the gen8 `.ydd` adler32 tail (patch #3) and the hashed compInfos field names.
 
-`gtav-asset-repair.spec` now collects `_native_abi3.pyd`, `fivefury/data/*`, the two shader XMLs and `MSVCP140.dll`, `MSVCP140_1.dll`, `MSVCP140_2.dll`, `MSVCP140_ATOMIC_WAIT.dll`, `VCRUNTIME140.dll`, `VCRUNTIME140_1.dll` from `%SystemRoot%\System32` (the pyd imports them; PyInstaller does not pull them on its own). The hard-coded `C:/Users/calvi/.../texconv.exe` path is gone.
+`gtav-asset-repair.spec` now collects `_native_abi3.pyd`, `fivefury/data/*`, the two shader XMLs and `MSVCP140.dll`, `MSVCP140_1.dll`, `MSVCP140_2.dll`, `MSVCP140_ATOMIC_WAIT.dll`, `VCRUNTIME140.dll`, `VCRUNTIME140_1.dll` from `%SystemRoot%\System32` (the pyd imports them; PyInstaller does not pull them on its own). The hard-coded absolute `texconv.exe` path is gone.
 
 ## Candidates screened (api.github.com, 2026-11-24)
 
@@ -364,7 +364,7 @@ ped_ingame_gen9  a_c_chickenhawk, a_f_m_beach_01, a_f_m_bevhills_01,
                  a_f_y_business_01..04                           ok / ok
 ```
 
-**Baseline (updated 2026-11-24, same day):** the deleted vanilla set is back — the user dropped `素材不要动\ped_ingame41_gen9\` in (41 peds, flat layout, each with `.ydd`/`.yft`/`.ymt`/`.ytd`, one stray `.yld`). Measured with `_probe/baseline41.py`:
+**Baseline (updated 2026-11-24, same day):** the deleted vanilla set is back — `素材不要动\ped_ingame41_gen9\` was restored (41 peds, flat layout, each with `.ydd`/`.yft`/`.ymt`/`.ytd`, one stray `.yld`). Measured with `_probe/baseline41.py`:
 
 ```
 41 peds
@@ -409,8 +409,8 @@ That is the whole point of the exercise: fivefury did the read, the mutation and
 Two samples, `素材不要动/ped_gen8/Kasumi` and `素材不要动/ped_gen9/Kasumi`; the gen9 one was produced by converting the gen8 one with CodeWalker.
 
 ```
-$ python _probe/kasumi.py
-core: C:\Users\calvi\Desktop\GM\ModDropV
+$ python kasumi.py
+core: <ModDropV build>
 
 === ped_gen8/Kasumi ===   ydd 39414332 B   ymt 1004 B
   availComp   [0, 255, 1, 255, 255, 255, 255, 2, 3, 4, 5, 255]
@@ -620,7 +620,7 @@ Upside: three PowerShell launches and two XML serialisation passes disappear per
 ## Reproduction
 
 ```bash
-PY="C:/Users/calvi/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/python.exe"
+PY="python"
 "$PY" _probe/probe_patch.py      # gen9 header fidelity, plain vs patched, diff = {}
 "$PY" _probe/probe_g9hdr.py      # field distribution across 4 gen9 files
 "$PY" _probe/probe_ymt.py        # ymt read / round-trip deep_eq
@@ -634,7 +634,7 @@ PY="C:/Users/calvi/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/pyt
 "$PY" _probe/roundtrip41.py      # 41 vanilla ymt rewritten by fivefury, still 41/41 ok
 ```
 
-Evidence levels: everything in *Measured results*, *§4.3*, *§4.4*, *End-to-end* and *In-game check* is 实测 (commands above, outputs quoted verbatim); patch code shapes are 实测 for #1 and #3 and 推测 for #2; licence/star/date fields are 文档 (api.github.com). The 41-vanilla baseline **was** re-run on this machine — the data lives at
+Evidence levels: everything in *Measured results*, *§4.3*, *§4.4*, *End-to-end* and *In-game check* is measured (commands above, outputs quoted verbatim); patch code shapes are measured for #1 and #3 and inferred for #2; licence/star/date fields are documented (api.github.com). The 41-vanilla baseline **was** re-run on this machine — the data lives at
 `素材不要动/ped_ingame41_gen9/` (41 `.ymt`, 41 `.ydd`, 41 `.ytd`, 41 `.yft`, 1 `.yld`, unpacked
 from `x64v.rpf\models\cdimages\componentpeds_a_f_y.rpf`), and `_probe/baseline41.py` prints
 `41/41 ok` against it through the fivefury `ped.audit` path:
@@ -652,7 +652,7 @@ ok   a_f_y_yoga_01              drawables  6  compInfos  6
 ```
 
 An earlier revision of this line said the data no longer exists — that was written before
-the user restored the baseline and is wrong.
+the baseline was restored, and is wrong.
 
 ## Round 4: legacy (gen8) YTD writes work in game
 
@@ -857,7 +857,7 @@ Working through `REPLY-to-probe.md`. Four items, evidence inline.
    contradictory "data no longer exists" sentence has been replaced). Nothing was left
    worded as "looks like it ran".
 
-2. **legacy YTD write — patch #2 is now 实测, not 推测.** Implemented in `ytd_write.py`
+2. **legacy YTD write — patch #2 is now measured, not inferred.** Implemented in `ytd_write.py`
    (`dump_legacy_headers` + `_make_prepare_legacy` + `_verify_legacy`), patching the
    produced section instead of copying fivefury's writer. `ped_gen8/Mai.ytd`:
    header diff after the fix is `name_ptr`/`data_ptr` only (relocation, unavoidable),
