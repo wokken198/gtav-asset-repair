@@ -12,8 +12,13 @@ layout inside the GUI**, find and fill short mip chains, shrink `.ytd` archives 
 audit `.ymt` ↔ `.ydd` pairs, and build badge normal maps. Desktop app, CLI, and a DeepSeek Harness
 bundle. No CodeWalker, no external converter, no external texture tool.
 
-[![tests](https://github.com/wokken198/gtav-asset-repair/actions/workflows/tests.yml/badge.svg)](https://github.com/wokken198/gtav-asset-repair/actions/workflows/tests.yml)
+[![tests](https://github.com/wokken198/gtav-asset-repair/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/wokken198/gtav-asset-repair/actions/workflows/tests.yml)
 [![release](https://img.shields.io/github/v/release/wokken198/gtav-asset-repair?label=release&color=2ea44f)](https://github.com/wokken198/gtav-asset-repair/releases/latest)
+![platform](https://img.shields.io/badge/platform-Windows-0078d4?logo=windows)
+![python](https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white)
+![license](https://img.shields.io/badge/license-MIT-2ea44f)
+![lang](https://img.shields.io/badge/lang-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-e04a4a)
+![lang](https://img.shields.io/badge/lang-English-1f6feb)
 
 ![the normal map page, light theme](docs/images/app-normals.png)
 
