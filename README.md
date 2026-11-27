@@ -123,7 +123,7 @@ Python 3.11+, `numpy`, `Pillow`. One optional extra:
 1. `Add folder` — point it at a folder of `.ytd` (or `.dds` for normal maps).
 2. Pick the long-edge limit (`1024` is the usual sweet spot for vehicles).
 3. `Analyze` → see VRAM and file savings before anything is written.
-4. `Compress` → every file is rewritten in place, original kept as `<name>.bak`.
+4. `Compress` → each dictionary is written as `<name>_lite.ytd` beside the source. Add `--inplace` on the CLI to rewrite in place and keep a `.bak`.
 5. Launch the game and check the result. Anything that looks wrong: rename the `.bak` back.
 
 The footer link and the note in the corner are there because step 5 is not optional for aggressive runs.
@@ -184,8 +184,8 @@ gtav-asset-repair ped fix "D:\mods\peds" --apply
   `--dry-run` prints the plan, the optional `dst` argument defaults to `<work>/gen9`, and every
   converted archive is read back and compared texture by texture (`.ytd`), mesh by mesh (`.ydd`) or
   fragment by fragment (`.yft`).
-  A folder of vehicle dictionaries comes out byte-identical to CodeWalker's own converter; ped
-  dictionaries and fragments match semantically, differing only in where the converter happened to
+  Seven of the 18 vanilla vehicle dictionaries come out byte-identical to CodeWalker's own
+  converter; the other eleven match semantically, differing only in where the converter happened to
   place its record table and in compactness. All 41 vanilla ped `.ydd` files come out
   channel-for-channel identical to the gen8 source and to CodeWalker's gen9 output. The 24 vanilla
   vehicle `.yft` files match the shipped gen9 fragments on all six runtime class VFTs and on the gen9
@@ -195,11 +195,9 @@ gtav-asset-repair ped fix "D:\mods\peds" --apply
   raising those to the gen9 table crashes such a ped in game; texture VFTs still move to gen9.
   Third-party packs with placeholder headers (resource state 0, junk class VFTs, a glass pane aimed
   at a non-glass mesh) are normalised to the retail gen9 values instead of being refused.
-  Fragments and drawables are also gated on size: a `.yft` or `.ydd` whose system segment is larger
-  than 32,768,000 B (4000 pages of 8 KiB) is reported as skipped before any rebuild starts. Two
-  shipped gen9 packs sit exactly at that size and load; a 32 MiB system segment (4096 pages) crashed
-  in game through three different converters, including CodeWalker's. Such a pack has to be
-  decimated first.
+  There is no size gate. One crash used to look like a 32 MiB size wall — a large fragment failed in
+  game through three different converters — but it was a dropped `script_rt_*` render-target flag,
+  not the size: a 34 MB fragment (4160 pages of 8 KiB) loads fine once that flag is preserved.
 
 ![diffuse to height field to normal map to lit result](docs/images/pipeline.png)
 
@@ -250,7 +248,7 @@ so archives that carry encrypted children are left alone rather than broken.
 ## Development
 
 ```bash
-python -m unittest discover -s tests -v     # 100 tests
+python -m unittest discover -s tests -v     # 101 tests
 ```
 
 ```bash
@@ -261,7 +259,7 @@ powershell -ExecutionPolicy Bypass -File packaging/build_win.ps1   # exe + porta
 src/gtav_asset_repair/   cli.py, dds.py, normals.py, ymt.py, ped.py, ytd.py, ytd_write.py, lite.py,
                         rpf.py, rpf7.py, settings.py, gui.py, gui_pages.py, gui_convert.py,
                         gen8to9.py, vendor/ (fivefury, trimesh)
-tests/                   test_core.py, test_lite.py, test_ped.py, test_gui.py, test_gen8to9.py
+tests/                   test_core.py, test_lite.py, test_ped.py, test_gui.py, test_gui_convert.py, test_gen8to9.py
 packaging/               PyInstaller entry point, build script, portable README
 dsh-plugin/              DeepSeek Harness bundle (the same operations as agent tools)
 market/                  DSH market index entry
@@ -285,8 +283,12 @@ pip-installed. Details: [dsh-plugin/docs/DETAIL.md](dsh-plugin/docs/DETAIL.md).
 
 ## Known limits
 
+- **Vehicle and ped assets only.** There is no path for buildings, interiors, MLO portals, standalone
+  static YDR props or animation data. Pointing it at those ends in a skipped file, not a conversion.
 - **Legacy → Enhanced only.** There is no gen9 → gen8 path; the newer layouts carry information the
   older engine cannot express.
+- **Two write styles.** Texture compression writes `<name>_lite.ytd` beside the source; mip repair and
+  ped repair rewrite the original and keep a `<name>.bak`. Nothing is modified without a backup.
 - **Encrypted RPF entries are left alone.** The defrag report says how many; moving them byte-for-byte
   would break the game, so they stay where they are.
 - **No model editing.** It does not fix bad UVs, bad bones or shader logic. It converts what is there —
@@ -317,7 +319,7 @@ archive.
 贴图字典换头、`.ydd` 与 `.yft` 按 gen9 重建（网格、通道、材质、物理与碰撞逐值保留，
 碰撞 bound 因 gen9 用 int16 量化有 ≤1 步长误差）、`.ymt` / `.yld` 原样复制。
 转换器选择的是**语义重建**路线，而不是字节修补：每个网格先解码、按 gen9 布局重建、再回读逐值比对。
-代价是慢（13 MB 的 fragment 约 18 秒，CodeWalker 与 Alchemist 都在 1 秒内），换来的是三件修补器做不到的事：
+代价是慢（13 MB 的 fragment 约 8 秒，CodeWalker 与 Alchemist 都在 1 秒内），换来的是三件修补器做不到的事：
 `script_rt_*` 渲染目标标志按原值保留（丢了会让车在刷出的瞬间崩溃、且不报错）、fragment 的运行时类表
 真正切到 gen9（CodeWalker 一项不换）、gen9 新增的材质默认值补齐（CodeWalker 把它们清零）。
 输出的每个字段都能和源文件对照，出问题能定位到具体字段，而不是拿到一个黑盒。

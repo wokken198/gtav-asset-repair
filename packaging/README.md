@@ -121,7 +121,7 @@ Conversion rebuilds each asset in the gen9 layout, which is what keeps `script_r
 flags intact. Lose that flag and the car still spawns, but the dashboard render target fails and the
 game crashes a few seconds later.
 
-A 13 MB body file takes about 10 seconds; one car (body, `_hi` and paint) around 20.
+A 13 MB body file takes about 8 seconds; one car (body, `_hi` and paint) around 15.
 
 ---
 
