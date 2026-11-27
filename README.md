@@ -14,10 +14,9 @@ bundle. No CodeWalker, no external converter, no external texture tool.
 
 [![tests](https://github.com/wokken198/gtav-asset-repair/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/wokken198/gtav-asset-repair/actions/workflows/tests.yml)
 [![release](https://img.shields.io/github/v/release/wokken198/gtav-asset-repair?label=release&color=2ea44f)](https://github.com/wokken198/gtav-asset-repair/releases/latest)
+[![license](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 ![platform](https://img.shields.io/badge/platform-Windows-0078d4?logo=windows)
 ![python](https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white)
-![license](https://img.shields.io/badge/license-MIT-2ea44f)
-![lang](https://img.shields.io/badge/lang-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-e04a4a)
 ![lang](https://img.shields.io/badge/lang-English-1f6feb)
 
 ![the normal map page, light theme](docs/images/app-normals.png)
@@ -315,6 +314,8 @@ Include:
 archive.
 
 ## 中文简介
+
+![lang](https://img.shields.io/badge/lang-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-e04a4a)
 
 **gtav-asset-repair** 是一个面向 **GTA V（增强版 gen9 / 旧版 gen8）** 的资源处理台：**在 GUI 里把旧版
 `.ytd` / `.ydd` / `.yft` 转成 gen9 布局**，外加贴图压缩、MIP 补全、法线生成、PED 修复与 RPF 整理。
