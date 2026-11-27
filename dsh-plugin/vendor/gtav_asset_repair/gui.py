@@ -28,7 +28,7 @@ from . import dds as ddsmod, settings
 from .normals import height_field, normal_from_height, shade_preview
 
 APP_TITLE = "gtav-asset-repair (Enhanced & Legacy)"
-VERSION = "0.7.7"
+VERSION = "0.7.7.7"
 ISSUE_URL = "https://github.com/wokken198/gtav-asset-repair/issues"
 CHANGELOG_URL = "https://github.com/wokken198/gtav-asset-repair/blob/main/CHANGELOG.md"
 
