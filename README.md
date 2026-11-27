@@ -253,6 +253,9 @@ gtav-asset-repair ped fix "D:\mods\peds" --apply
 
 ## Safety rules
 
+- **Keep your own copy.** The `<name>.bak` this tool leaves behind is a last resort for a bad write, not
+  a substitute for your own backup. If you overwrite or delete the source outside the tool, nothing here
+  can bring it back.
 - **Backups** — anything written in place leaves `<name>.bak`, and an older `.bak` is replaced only after
   the new file has been read back and checked.
 - **Dry run by default** — `ped fix` prints what it would change; nothing is written without `--apply`.
@@ -299,19 +302,30 @@ pip-installed. Details: [dsh-plugin/docs/DETAIL.md](dsh-plugin/docs/DETAIL.md).
 
 ## Known limits
 
-- **Vehicle and ped assets only.** There is no path for buildings, interiors, MLO portals, standalone
-  static YDR props or animation data. Pointing it at those ends in a skipped file, not a conversion.
-- **Legacy → Enhanced only.** There is no gen9 → gen8 path; the newer layouts carry information the
-  older engine cannot express.
+**What it covers**
+
+- ✅ **Vehicle and ped assets.** `.ytd`, `.ydd`, `.yft`, `.ymt` and `.yld` for car packs and ped models.
+- ✅ **Legacy → Enhanced.** gen8 → gen9 for `.ytd` / `.ydd` / `.yft`, with `.ymt` / `.yld` copied through.
+- ✅ **Same work on gen8 and gen9 files.** Texture compression, mip chains, `.ymt` ↔ `.ydd` audits and
+  `.rpf` defrag — none of these care which generation the file came from.
+
+**What it does not do**
+
+- ❌ **No world assets.** Buildings, interiors, MLO portals, standalone static YDR props and animation
+  data have no path here. Pointing it at those ends in a skipped file, not a conversion.
+- ❌ **No gen9 → gen8.** The newer layouts carry information the older engine cannot express.
+- ❌ **No model editing.** Bad UVs, bad bones and broken shader logic stay bad — if the source mesh is
+  wrong, the output is wrong.
+- ❌ **No FiveM escrow.** Those assets are encrypted and nothing here decrypts them.
+
+**Deliberate behaviour, not gaps**
+
 - **Two write styles.** Texture compression writes `<name>_lite.ytd` beside the source; mip repair and
   ped repair rewrite the original and keep a `<name>.bak`. Nothing is modified without a backup.
-- **Encrypted RPF entries are preserved, not rebuilt.** Each child `.rpf` is tested on its own: if every
-  entry inside it can be read, it gets rebuilt and only kept when it actually shrinks; if it is encrypted
-  or holds unreadable entries, its bytes are copied into the new container untouched. The outer archive is
-  always re-laid out, and the defrag report states how many children were left as-is.
-- **No model editing.** It does not fix bad UVs, bad bones or shader logic. It converts what is there —
-  if the source mesh is wrong, the output is wrong.
-- **FiveM escrow assets cannot be read.** They are encrypted, and nothing here decrypts them.
+- **Encrypted child `.rpf`s are preserved.** Each child `.rpf` is tested on its own: if every entry inside
+  it can be read, it gets rebuilt and only kept when it actually shrinks; if it is encrypted or holds
+  unreadable entries, its bytes are copied into the new container untouched. The outer `.rpf` is always
+  re-laid out, and the defrag report states how many children were left as-is.
 
 ## Reporting bugs
 
@@ -356,7 +370,7 @@ MIT for the code. Game-derived assets are not covered and are not shipped here.
 | **纹理压缩（YTD）** | 缩小 `.ytd` 里的贴图，原文件保留 |
 | **MIP 检查（YTD/DDS）** | 找出缺级贴图，补齐整条链 |
 | **Ped 修复（YMT）** | 核对 `.ymt` 与 `.ydd`，修掉参数漂移 |
-| **Defrag（RPF）** | 重排归档，把替换文件留下的空洞还回来 |
+| **Defrag（RPF）** | 重排 `.rpf`，把替换文件留下的空洞还回来 |
 
 ### 1. Gen8→Gen9 转换
 
@@ -454,6 +468,8 @@ Blender 里改了组件却忘了变化文件——GTAV 就会出现部件错位�
 
 ## 安全规则
 
+- **自己也要留一份。** 工具留的 `<name>.bak` 是写坏时的最后一道保险，不是你自己备份的替代品；
+  在工具之外覆盖或删掉源文件，这里救不回来。
 - **留备份：** 任何原地写入都会留下 `<name>.bak`，且只有新文件被读回校验通过后才替换旧的 `.bak`。
 - **默认只演练：** `ped fix` 不加 `--apply` 只打印会改什么。
 - **不偷偷改格式：** 缩放只动尺寸；换格式只在「激进」模式，且跳过 `script_rt_*`、法线、
@@ -463,17 +479,28 @@ Blender 里改了组件却忘了变化文件——GTAV 就会出现部件错位�
 
 ## 已知限制
 
-- **只处理 Vehicle 与 Ped 资源。** 没有建筑、内饰、MLO、独立静态 YDR 道具或动画数据的路径；
-  指向那些文件只会被记为跳过，不会产出转换结果。
-- **只做 gen8 → gen9。** 没有反向路径，新布局里有些信息旧引擎表达不了。
+**能做什么**
+
+- ✅ **只处理 Vehicle 与 Ped 资源。** 车包与 Ped 模型的 `.ytd`、`.ydd`、`.yft`、`.ymt`、`.yld`。
+- ✅ **Legacy → Enhanced。** `.ytd` / `.ydd` / `.yft` 从 gen8 转 gen9，`.ymt` / `.yld` 原样复制。
+- ✅ **两代通用的整理工作。** 贴图压缩、MIP 链、`.ymt` ↔ `.ydd` 校验、`.rpf` 碎片整理——
+  这四样不分世代，gen8 的文件也能直接用。
+
+**做不到什么**
+
+- ❌ **不碰世界资源。** 建筑、内饰、MLO 传送门、独立静态 YDR 道具、动画数据都没有路径；
+  指向那些文件只会被记为跳过，不会产出结果。
+- ❌ **没有 gen9 → gen8。** 新布局里有些信息旧引擎表达不了。
+- ❌ **不编辑模型本体。** UV、骨骼、shader 逻辑坏了它不管——源网格是坏的，输出就是坏的。
+- ❌ **读不了 FiveM escrow。** 那是加密的，这里没有解密能力。
+
+**以下是有意为之，不是缺陷**
+
 - **两种写盘方式。** 贴图压缩另存 `<name>_lite.ytd`；MIP 修复与 Ped 修复直接重写原文件并留
   `<name>.bak`。任何修改都带备份。
-- **加密的 RPF 条目保留，不重建。** 每个子 `.rpf` 单独判断：内部每条都能读出来才重建，且只在
+- **加密的子 `.rpf` 原样保留。** 每个子 `.rpf` 单独判断：内部每条都能读出来才重建，且只在
   确实变小时才替换；加密或含不可读条目的子树按原字节搬进新容器。最外层总会重新排布，
   整理报告会说明有几个子包保持原样。
-- **不编辑模型本体。** 不修 UV、不修骨骼、不改 shader 逻辑。它转换已有的东西——源网格是坏的，
-  输出就是坏的。
-- **FiveM escrow 资源读不了。** 那是加密的，这里没有解密能力。
 
 ## 报告问题
 
