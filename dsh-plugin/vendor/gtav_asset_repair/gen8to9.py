@@ -8,7 +8,7 @@ actually changes, measured on those pairs:
   page is rebuilt with 0x80-byte gen9 records, the names/keys pools and the
   pointers are re-laid-out, and the pixel payload is copied byte for byte onto
   gen9 page boundaries.  ``sultan.ytd`` converts to 77479 bytes, identical to
-  CodeWalker's output (zero differing bytes, see `_probe_gen8to9/`).
+  CodeWalker's output (zero differing bytes; see `GEN8-TO-GEN9-NOTES.md` §3).
 * ``.ymt`` / ``.yld``  keep their RSC7 version (2 / 8) and are *byte identical*
   between the two generations -- 45 .ymt plus 1 .yld compared, all equal -- so
   they are copied through unchanged.
