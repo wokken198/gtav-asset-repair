@@ -102,10 +102,12 @@ Mip work goes the other way: a 4-file dictionary with 25 short chains went from 
 
 ## Install
 
-**Windows, no Python:** download `gtav-asset-repair-0.7.7.zip` from the
+**Windows, no Python:** download the `gtav-asset-repair-*.zip` from the
 [latest release](https://github.com/wokken198/gtav-asset-repair/releases/latest), unzip the **whole folder**
 (the exe needs `_internal/` next to it) and run `gtav-asset-repair.exe`. If Windows SmartScreen blocks it
 (a fresh build has no signature), run `Run.bat` instead — a batch file is not blocked.
+
+**Where to write:** point the output folder somewhere inside your user profile (e.g. `Documents\gtav`), not at the Desktop root or a drive root. Windows folder protection sometimes lets Explorer create folders there but refuses the same call from an unsigned app, and the tool reports it as `WinError 5`.
 
 **From source:**
 
@@ -124,7 +126,7 @@ Python 3.11+, `numpy`, `Pillow`. One optional extra:
 2. Pick the long-edge limit (`1024` is the usual sweet spot for vehicles).
 3. `Analyze` → see VRAM and file savings before anything is written.
 4. `Compress` → each dictionary is written as `<name>_lite.ytd` beside the source. Add `--inplace` on the CLI to rewrite in place and keep a `.bak`.
-5. Launch the game and check the result. Anything that looks wrong: rename the `.bak` back.
+5. Launch the game and check the result. Anything that looks wrong: delete the `_lite.ytd` (the source was never touched) — or, if you used `--inplace`, mip repair or ped repair, rename the `.bak` back.
 
 The footer link and the note in the corner are there because step 5 is not optional for aggressive runs.
 
@@ -261,7 +263,7 @@ src/gtav_asset_repair/   cli.py, dds.py, normals.py, ymt.py, ped.py, ytd.py, ytd
                         gen8to9.py, vendor/ (fivefury, trimesh)
 tests/                   test_core.py, test_lite.py, test_ped.py, test_gui.py, test_gui_convert.py, test_gen8to9.py
 packaging/               PyInstaller entry point, build script, portable README
-dsh-plugin/              DeepSeek Harness bundle (the same operations as agent tools)
+dsh-plugin/              DeepSeek Harness bundle (the same operations as DSH tools)
 market/                  DSH market index entry
 docs/                    pitfalls.md, why-mips.md, ped-ymt-rules.md, fivefury-probe.md, images/
 ```
@@ -277,7 +279,7 @@ What is not fine: shipping this code without the notice, or redistributing game 
 
 ## Optional: DeepSeek Harness bundle
 
-`dsh-plugin/` exposes the same operations as agent tools (`gta_badge_normal`, `gta_ytd_lite`,
+`dsh-plugin/` exposes the same operations as DSH tools (`gta_badge_normal`, `gta_ytd_lite`,
 `gta_ped_check`, `gta_ped_fix`, …). The Python package is vendored inside, so nothing needs to be
 pip-installed. Details: [dsh-plugin/docs/DETAIL.md](dsh-plugin/docs/DETAIL.md).
 

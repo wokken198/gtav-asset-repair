@@ -15,10 +15,7 @@
     "locale/*.json",
     "icon.svg",
     "docs",
-    "vendor",
-    "resources/pack_ytd.ps1",
-    "README.md",
-    "resources/ytd_inspect.ps1"
+    "vendor"
   ],
   "keywords": [
     "dsh",

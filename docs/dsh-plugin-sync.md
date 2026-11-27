@@ -49,7 +49,7 @@ decision this document exists to put in front of the release, so state it plainl
 - **Option C — download fivefury on first use.** Rejected: `pip install` is
   unusable under the DSH sandbox on this machine (`Permission denied` on
   `pip-unpack-*`), and a silent download failure is exactly the class of bug
-  `AGENTS.md` §2 forbids.
+  the project's regression rule forbids.
 
 Recommendation: **A**, because the plugin's whole value is "no external tools".
 11 MB is a one-time cost per install; a broken first-run is permanent irritation.

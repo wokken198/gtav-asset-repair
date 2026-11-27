@@ -114,7 +114,7 @@ export function apply(ctx) {
 			{
 				source: stringProp("DDS file or directory of DDS files to convert"),
 				out: stringProp("Output directory for the generated normal maps"),
-				strength: { type: "number", description: "Relief strength: flat decals 8-10, chrome art 4-5, text 6-7. Default 6.5" },
+				strength: { type: "number", description: "Relief strength: text-only art 6-7, chrome art 4-5, flat printed decals 8-10. Default 2.0" },
 				blur: { type: "number", description: "Gaussian pre-blur on the height field. Default 1.2" },
 				fmt: { type: "string", enum: ["DXT5", "DXT1", "BC5", "A8R8G8B8"], description: "Output format. Default DXT5" },
 				sheet: stringProp("Optional path for a before/after contact sheet"),
@@ -171,7 +171,7 @@ export function apply(ctx) {
 	ctx.tools.register(
 		tool(
 			"gta_ytd_pack",
-			"Build a gen9 YTD from a CodeWalker ytd.xml plus a folder of DDS files. Passing original restores the gen9 render-target descriptor bits by texture name; without it scripted render targets such as dashboard dials break in game.",
+			"Build a gen9 YTD from a CodeWalker ytd.xml plus a folder of DDS files. Passing original restores the gen9 render-target descriptor bits by texture name; without it scripted render targets such as dashboard dials break in game. The XML is the input format — no CodeWalker installation is needed at run time.",
 			{
 				xml: stringProp("Path to the TextureDictionary XML"),
 				build: stringProp("Folder holding the DDS files named by the XML"),
@@ -192,7 +192,7 @@ export function apply(ctx) {
 	ctx.tools.register(
 		tool(
 			"gta_ytd_list",
-			"List the textures inside one or more .ytd texture dictionaries without modifying them: name, size, format and mip count. Reads through CodeWalker, so it needs CodeWalker.Core.dll (auto-detected, or set GTA_TOOLS_CW).",
+			"List the textures inside one or more .ytd texture dictionaries without modifying them: name, size, format and mip count. Pure Python, no CodeWalker needed.",
 			{
 				files: {
 					type: "array",

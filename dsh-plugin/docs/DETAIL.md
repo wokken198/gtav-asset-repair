@@ -1,29 +1,24 @@
-# GTA V texture tools
+# GTA V asset tools
 
-Nine tools for GTA V **Enhanced (gen9)** and **Legacy (gen8)** assets. Textures are handled
-regardless of generation; the ped tools read the `.ydd` header and pick the matching CodeWalker
-loader, so addon peds for either game build work without a flag.
+Nine tools for GTA V **Enhanced (gen9)** and **Legacy (gen8)** assets, plus a six-page desktop
+window that covers the same ground without a terminal. Everything runs in pure Python — no
+CodeWalker installation, no .NET assembly, no PowerShell.
 
-This page covers the bundle itself. Command-line behaviour, game-version differences and the full flag
-list live in the [repository README](../../README.md).
+This page covers the bundle itself. Command-line behaviour, the Gen8 → Gen9 conversion rules and
+the full flag list live in the [repository README](../../README.md).
 
 ## Requirements
 
-- **Python 3.9+** with `numpy` and `Pillow`
-- **texconv.exe** (DirectXTex) for DDS decode/encode
-- **CodeWalker.Core.dll** for `gta_ytd_pack`, `gta_ytd_list`, `gta_mips_check`, `gta_ytd_lite`, `gta_ped_check` and `gta_ped_fix` (a build that writes `.ymt` correctly is required for `gta_ped_fix`)
+- **Python 3.11+** with `numpy` and `Pillow` (resolved automatically when you run from DSH)
+- **texconv.exe** (DirectXTex) — only `gta_badge_normal` and `gta_ytd_scale` use it, and only if
+  you pass it explicitly or leave it on `PATH`
 
-Set these environment variables before starting DSH (or in the shell that launches it):
+## Environment variables
 
 | variable | used by | meaning |
 |---|---|---|
 | `GTA_TOOLS_PYTHON` | all | python executable; defaults to probing `python3`, `python`, then the Python bundled with DSH |
-| `GTA_TOOLS_TEXCONV` | normal, scale | path to `texconv.exe`; defaults to a `PATH` lookup and the working directory's parents |
-| `GTA_TOOLS_CW` | pack, ytd list, mips check | CodeWalker folder; defaults to probing `GTA_TOOLS_CW` / `CODEWALKER_DIR`, `C:\CodeWalker30_dev48`, Desktop, Desktop\GM, Downloads, then the working directory's parents |
-
-CodeWalker itself is **not** bundled: `gta_ytd_pack`, `gta_ytd_list` and `gta_mips_check` need it, and each
-tool reports a readable error
-when it cannot be found.
+| `GTA_TOOLS_TEXCONV` | normal maps, scale | path to `texconv.exe`; defaults to a `PATH` lookup and the working directory's parents |
 
 ## gta_badge_normal
 
@@ -31,7 +26,8 @@ Turns a badge diffuse atlas into a tangent-space normal map. Relief is built fro
 luminance of the diffuse, so engraved lettering keeps its shape; the atlas margin is forced flat so the
 texture cell border does not show up as a rectangle around the text.
 
-- `strength` — flat printed decals 8-10, chrome/baked-specular art 4-5, text-only art 6-7
+- `strength` — default 2.0 (matches the desktop window). Raise it for chrome or baked-specular art;
+  flat printed decals usually want more, canvas-like art wants less
 - `blur` — smooths the height field before differentiating; 1.0-1.4 is typical
 - `fmt` — `DXT5`, `DXT1`, `BC5` or `A8R8G8B8`
 
@@ -54,6 +50,8 @@ because resizing RGBA in one pass premultiplies alpha and visibly darkens semi-t
 Builds a gen9 YTD from a CodeWalker `ytd.xml` plus a folder of DDS files. Pass `original` to copy the
 gen9 render-target descriptor bits by texture name — without that step the archive looks correct in a
 viewer but breaks scripted render targets (dashboard dials, camera feeds) in game.
+
+The XML is the *input format*; nothing from CodeWalker has to be installed to run the pack.
 
 ## gta_ytd_list
 
@@ -94,14 +92,14 @@ A mismatch is what makes a ped spawn with misplaced parts, broken LODs or a cras
 ## gta_ped_fix
 
 Repairs those pairs: trims the `.ymt` down to the drawables the `.ydd` ships, or corrects the counts,
-then re-exports the packed file to prove it reads back. Dry run unless `apply` is true; a `.bak` stays
-next to every file it rewrites. Needs a CodeWalker build that writes `.ymt` correctly — older builds
-silently shuffle components, and the tool reports that instead of writing a broken file.
+then re-reads the packed file to prove it parses back. Dry run unless `apply` is true; a `.bak` stays
+next to every file it rewrites. Files that already pass the audit are left untouched.
 
 ## Limitations
 
-- Windows-only in practice: the pack step needs CodeWalker's .NET assembly.
-- `gta_ytd_pack` writes gen9 archives; legacy (gen8) assets need `gtav_asset_repair`' `--legacy` switch on the CLI.
+- Window and CLI assume Windows paths; the library itself is portable.
+- There is no Gen9 → Gen8 path: the newer layout carries information the old engine cannot express.
+- Encrypted RPF entries are copied as-is — moving them would break the archive.
 - Long jobs run until the child process exits; very large batches are better run from the CLI.
 
 ## Installing from the market index
@@ -114,18 +112,21 @@ published bundle reproducible.
 
 ## What the desktop window does
 
-The GUI (`gtav-asset-repair.exe`) covers the same ground without a terminal, on four pages:
+`gtav-asset-repair.exe` covers the same ground without a terminal, on six pages:
 
 | page | what it reads | what it writes |
 |---|---|---|
 | Normal maps | `.dds` | `*_n.dds` next to the source |
-| Texture compression | `.ytd` | in place, original kept as `.ytd.bak` |
+| Texture compression | `.ytd` | `<name>_lite.ytd` by default, or in place with a `.bak` |
 | Mipmap check & fill | `.dds`, `.ytd` | in place, original kept as `.bak` |
 | Ped YMT repair | `.ydd` + `.ymt` pairs | in place, original kept as `.bak` |
+| Defragment RPF | `.rpf` | in place, original kept as `.bak` |
+| Convert Gen8→9 | `.ytd` / `.ydd` / `.yft` / `.ymt` / `.yld` | a mirrored tree under `<folder>-gen9` |
 
 Two behaviours worth knowing before you file a bug:
 
 - `script_rt_*` render targets are never given extra mip levels; they stay listed as incomplete on
   purpose, because their chain follows the render-target size.
-- `ped fix` refuses to write when the local CodeWalker build shuffles `.ymt` components, and names
-  the build instead of producing a file that only looks repaired.
+- Converting a vehicle needs the whole set — `car.yft`, `car_hi.yft` and `car.ytd`. Converting only the
+  body leaves half the car on the gen8 layout; suspension and steering parts (brake calipers, steering
+  wheel) then fly around in game.

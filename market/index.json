@@ -28,7 +28,7 @@
         "zh": "GTA V 贴图工具"
       },
       "description": {
-        "en": "Gen8 to Gen9 asset conversion plus badge normal maps, .ymt variation audit, batch DDS rescale, descriptor-safe .ytd repack, texture listing and mip-chain checks, as agent tools. GTA V Legacy and Enhanced.",
+        "en": "Gen8 to Gen9 asset conversion plus badge normal maps, .ymt variation audit, batch DDS rescale, descriptor-safe .ytd repack, texture listing and mip-chain checks, as DSH tools. GTA V Legacy and Enhanced.",
         "zh": "gen8 到 gen9 资源转换，外加车标转法线、.ymt 变体审计、批量 DDS 缩放、保留渲染目标描述符的 .ytd 重打包、贴图字典查看与 mip 链检查。支持 GTA V 旧版与增强版。"
       },
       "icon": "https://cdn.jsdelivr.net/gh/wokken198/gtav-asset-repair@main/dsh-plugin/icon.svg",

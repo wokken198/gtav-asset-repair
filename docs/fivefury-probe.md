@@ -13,7 +13,7 @@ For the *whole* toolkit it still needs the YTD header patches (#1, #2) before `p
 
 What it does *not* give us: a CodeWalker-compatible XML layer. Our `export → scale → pack` pipeline uses `.ytd.xml` / `.ydd.xml` / `.ymt.xml` as the intermediate format; with fivefury the intermediate becomes live objects, so `ytd.py`, `ped.py::export_pair` and `ymt.py` change shape (see *Migration*).
 
-## HANDOFF-fivefury §7 — the six questions, answered
+## Round 1 — the six questions, answered
 
 Every answer is 实测 (measured) unless marked 文档 / 推测.
 
@@ -101,7 +101,7 @@ field differences: {}   (buffalo 46 textures, HarleySS 32, cavalcade3 20)
 
 ### 6. YMT: can it open a `.ymt` read-only and list components / drawable counts?
 
-**Yes — and write works too, which §5 of the handoff did not ask for.** `read_ymt` opened
+**Yes — and write works too, which the original questions did not ask for.** `read_ymt` opened
 all 41 vanilla peds plus 18 add-on peds and agreed with the CodeWalker XML on `availComp`,
 `numAvailTex`, the per-component drawable lists and `compInfos` on **16/16** non-vanilla
 pairs. `iter_ped_drawables` yields 7 entries for `HarleySS` / `Mai`, 17 for
@@ -118,7 +118,7 @@ YTD read (1), gen9 scale-and-write (2, 3), descriptor preservation (5) and YMT r
 patch #2, which affects `lite` / `fix_mips` on gen8 archives only. `ped check` / `ped fix`
 are unaffected because **YMT has no generation split**: RSC7 version 2 with the same header
 on both, and CodeWalker's own converter logs `MaiT.ymt - conversion not required, directly
-copying file` (实测，截图归档于会话; 文档: CodeWalker *Convert Assets* 对话框).
+copying file` (实测; 文档: CodeWalker *Convert Assets* 对话框).
 
 ## Implementation status (2026-11-24)
 
@@ -268,7 +268,7 @@ $ ytd_inspect.ps1 -Ytd _probe/out/legacy_Mai_patched.ytd  -CoreDir <ModDropV> -L
 
 `save()` now routes legacy archives through `_make_prepare_legacy()` and proves the
 result with `_verify_legacy()`, which re-reads the file and raises if any of the four
-fields drifted — the same read-back rule as gen9 (AGENTS §8.5).
+fields drifted — the same read-back rule as gen9.
 
 ### 3. gen8 YDD fails on a trailing adler32 ✅ verified
 `fivefury/resource.py:394-404` uses raw deflate (`wbits=-15`) *and* demands `unused_data == b""`. Legacy YDD streams carry a 4-byte adler32 after the deflate data. Measured:
@@ -283,7 +283,7 @@ Fix: accept `unused_data <= 4` when the tail equals `adler32(output)`, or let `r
 
 Patch verified in `_probe/probe_ydd_fix.py` (monkey-patch, read only). Before: 3/3 gen8 `.ydd` raise. After: all six probed files agree with CodeWalker — `Mai`/`MaiS`/`MaiT` 7/7, `HarleySS` 7/7, `adare4` 2/2, `a_f_m_beach_01` 17/17.
 
-## HANDOFF-fivefury §4.3 — read / write / round-trip on real peds
+## Round 2 — read / write / round-trip on real peds
 
 Script `_probe/probe_ymt_write.py <batch> <stem>` copies the pair into `_probe/cases/<stem>/`, mutates only that copy, and judges every write with **CodeWalker's own XML export** (an implementation independent of fivefury). The source folder is never written.
 
@@ -351,7 +351,7 @@ The order is stable across four unrelated peds (adare4 / HarleySS / Mai / a_f_m_
 
 `jenk_hash`/`joaat` of the field names (`0x756C7982`, `0xA9CBB471`) do **not** match these hashes, so do not try to derive them — index by position, or probe the key set once and assert it. `compIdx` is the **availComp slot number** (0..11), not the `aComponentData3` position.
 
-## HANDOFF-fivefury §4.4 — regression over every available pair
+## Round 3 — regression over every available pair
 
 `_probe/scan_all.py` reads all 16 pairs in `素材不要动\` with fivefury and with CodeWalker, then compares `availComp`, `numAvailTex`, per-component texture counts and `compInfos`.
 
@@ -652,7 +652,7 @@ ok   a_f_y_yoga_01              drawables  6  compInfos  6
 ```
 
 An earlier revision of this line said the data no longer exists — that was written before
-the user restored the baseline and is wrong. `AGENTS.md` §0 records the current location.
+the user restored the baseline and is wrong.
 
 ## Round 4: legacy (gen8) YTD writes work in game
 

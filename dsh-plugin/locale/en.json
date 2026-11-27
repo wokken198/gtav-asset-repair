@@ -1,7 +1,7 @@
 {
   "meta": {
-    "title": "GTA V texture tools",
-    "description": "Nine tools for GTA V Enhanced & Legacy assets, plus a four-page desktop window: badge normal maps, YTD shrink/mip fill/list, prop-free pack, and ped YMT check/repair.",
+    "title": "GTA V asset tools",
+    "description": "Nine tools for GTA V Enhanced & Legacy assets, plus a six-page desktop window: badge normal maps, YTD shrink/mip fill/list, RPF defrag, and Gen8 to Gen9 conversion.",
     "detail": "docs/DETAIL.md"
   }
 }

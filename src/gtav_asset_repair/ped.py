@@ -410,7 +410,7 @@ def repair_ymt(content, report: Report) -> list[str]:
 def fix_pair(stem: str, ydd: str, ymt: str, core_dir: str = "", progress=None) -> tuple[list[str], str]:
     """Audit, repair the decoded tree, write it back and verify. Returns (changes, out).
 
-    A file that already passes the audit is left untouched (AGENTS.md §3), and a
+    A file that already passes the audit is left untouched, and a
     rewritten file only replaces the original after the audit passes again on the
     bytes actually written. The return shape matches `align_pair`, because the
     CLI and the GUI print the individual changes.

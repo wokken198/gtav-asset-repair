@@ -87,7 +87,7 @@ self-contained RPF7 reader. No CodeWalker, no OpenIV, no .NET, no PowerShell.
 - Python package: `gtatools` → `gtav_asset_repair`; the exe, the window and the bundle follow the new
   name.
 - DSH bundle: `dsh-gta-tools` → `dsh-gtav-asset-repair`; tool names keep their `gta_*` prefix, so
-  existing agent scripts still call the same functions.
+  existing scripts still call the same functions.
 - Repository: `github.com/wokken198/gtav-asset-repair` (old links redirect).
 
 ## [0.6.3] and earlier

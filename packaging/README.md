@@ -56,11 +56,11 @@ Output is written next to each source file, in a `normals` subfolder. Existing n
 
 1. `Add YTD`.
 2. Pick a long-edge limit (1024 / 1536 / 2048).
-3. Choose one of the three options:
-   - **Option 1 · Snap to tier** — long edge snaps to the nearest tier below.
-   - **Option 2 · Ceiling** — anything above the limit is scaled down; smaller textures are left
+3. Choose one of the three options (`--mode` on the CLI):
+   - **Option 1 · Snap to tier** (`--mode tier`) — long edge snaps to the nearest tier below.
+   - **Option 2 · Ceiling** (`--mode cap`) — anything above the limit is scaled down; smaller textures are left
      alone. This is the safe default.
-   - **Option 3 · Reformat** — ceiling plus format swaps (uncompressed → DXT5, opaque DXT5 → DXT1).
+   - **Option 3 · Reformat** (`--mode agg`) — ceiling plus format swaps (uncompressed → DXT5, opaque DXT5 → DXT1).
      Smaller files, but **verify in game**.
 4. `Analyze` shows what you would save without writing anything. `Compress` writes `<name>_lite.ytd`
    and a short report next to it.
@@ -180,7 +180,7 @@ not kept.
 **Mip check flags nearly every texture in a mod.** Many mods ship a single mip level. Flagging is
 correct; whether to fix them is your call.
 
-**Compression seems too gentle on some files.** Textures under 1000 px, `script_rt_*`, normal maps
+**Compression seems too gentle on some files.** Textures under 1024 px, `script_rt_*`, normal maps
 and specular maps are skipped on purpose; the report says why for each.
 
 ---
