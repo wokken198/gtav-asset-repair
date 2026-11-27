@@ -2,9 +2,9 @@
 
 Notable changes only. UI polish, internal fixes and development notes are left out on purpose.
 
-## [0.7.7] - 2026-11-27
+## [0.7.7.7] - 2026-11-28
 
-**Gen8 to Gen9 conversion, in the GUI.**
+Patch release: the Convert page fixes below, plus a README rewritten around the six pages.
 
 ### Fixed
 
@@ -14,6 +14,10 @@ Notable changes only. UI polish, internal fixes and development notes are left o
   `%TMP%` and `%LOCALAPPDATA%` were all unusable; the program folder is now the last resort.
 - The YTD page warning kept its English text after switching language and still pointed at
   CodeWalker.
+
+## [0.7.7] - 2026-11-27
+
+**Gen8 to Gen9 conversion, in the GUI.**
 
 ### Added
 
