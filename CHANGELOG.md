@@ -4,7 +4,7 @@ Notable changes only. UI polish, internal fixes and development notes are left o
 
 ## [0.7.7.7] - 2026-11-28
 
-Patch release: the Convert page fixes below, plus a README rewritten around the six pages.
+Two Convert-page defects, the scratch-directory fallback, and the YTD page banner.
 
 ### Fixed
 
@@ -12,8 +12,7 @@ Patch release: the Convert page fixes below, plus a README rewritten around the 
   stopped one slice short of the end.
 - Mip check and texture compression failed with `no writable scratch directory` when `%TEMP%`,
   `%TMP%` and `%LOCALAPPDATA%` were all unusable; the program folder is now the last resort.
-- The YTD page warning kept its English text after switching language and still pointed at
-  CodeWalker.
+- The YTD page banner kept its English text after switching language and still pointed at CodeWalker.
 
 ## [0.7.7] - 2026-11-27
 
@@ -45,14 +44,10 @@ Patch release: the Convert page fixes below, plus a README rewritten around the 
 
 ### Fixed
 
-- Texture compression and mip filling work in the portable build on machines where `%TEMP%` and
-  `%LOCALAPPDATA%` are locked down: the scratch directory falls back next to the executable.
 - Bad files no longer abort a folder run. A file that cannot be decoded or written is reported with
   its error and the rest of the folder continues.
 - A short but real `.ytd` (186 bytes, one texture) is no longer mistaken for a placeholder and
   version-bumped into a broken file.
-- The YTD page banner and its summary line follow the interface language, and the banner no longer
-  mentions CodeWalker.
 - The MIP check page reads loose `.dds` files through their DDS header instead of the dictionary
   reader.
 
