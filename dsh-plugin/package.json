@@ -1,6 +1,6 @@
 {
   "name": "dsh-gtav-asset-repair",
-  "version": "0.7.7",
+  "version": "0.7.7.7",
   "description": "GTA V texture toolkit for Enhanced & Legacy: badge normal maps, YTD shrink, mip fill, ped YMT check/repair",
   "license": "MIT",
   "type": "module",
